@@ -1,8 +1,18 @@
-.venv
-__pycache__
+cat > .gitignore <<'EOF'
+data/
+renders/
+render.log
+progress.json
+preflight.json
+
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.env
 
 *.blend
 *.blend1
-*.log
-*.json
-renders
+*.blend@
+*.zip
+EOF

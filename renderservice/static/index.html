@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blender Render</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 14px/1.45 system-ui, sans-serif; background: #0c0e11; color: #d8dce2; margin: 0; padding: 24px 16px; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { font-size: 20px; letter-spacing: 0.12em; margin: 0 0 20px; }
+  .drop { border: 1px dashed #3a4350; padding: 16px; margin-bottom: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .card { border: 1px solid #262c35; background: #12161b; padding: 14px; margin-bottom: 14px; }
+  .head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .name { font-weight: 600; }
+  .badge { text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em; padding: 2px 8px; border: 1px solid #3a4350; }
+  .badge.rendering { border-color: #e8b04a; color: #e8b04a; }
+  .badge.done { border-color: #58c47a; color: #58c47a; }
+  .badge.failed, .badge.cancelled { border-color: #d9605a; color: #d9605a; }
+  .meta { color: #8b95a3; margin: 6px 0; }
+  .warn { color: #e8b04a; margin: 4px 0; }
+  .err { color: #d9605a; margin: 4px 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  progress { width: 100%; height: 10px; }
+  img.preview { max-width: 100%; max-height: 260px; margin-top: 10px; display: block; }
+  button, select, input[type=text] { background: #1a2028; color: inherit; border: 1px solid #343c48; padding: 6px 10px; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { border-color: #e8b04a; }
+  a.btn { color: #0c0e11; background: #e8b04a; padding: 6px 12px; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BLENDER RENDER</h1>
+  <div class="drop">
+    <input type="file" id="file" accept=".blend,.zip">
+    <progress id="up" max="1" value="0" hidden style="width:200px"></progress>
+    <span id="upmsg"></span>
+  </div>
+  <div id="jobs"></div>
+</div>
+<script>
+const jobsEl = document.getElementById("jobs");
+const ui = {};
+let data = [];
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const clock = s => {
+  if (s == null) return "—";
+  s = Math.max(0, Math.round(s));
+  return [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(v => String(v).padStart(2, "0")).join(":");
+};
+const mb = b => (b / 1048576).toFixed(1) + " МБ";
+const LABEL = {needs_selection: "выбери .blend", preflight: "проверка", ready: "готов", queued: "в очереди", rendering: "рендер", done: "готово", failed: "ошибка", cancelled: "отменено"};
+
+async function api(path, options = {}) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { msg = (await res.json()).detail || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+function card(j) {
+  const p = j.progress || {}, i = j.info || {}, s = ui[j.id] || (ui[j.id] = {});
+  const missing = i.missing_files || [];
+  const startable = ["ready", "done", "failed", "cancelled"].includes(j.status) && j.info && !j.project_deleted;
+  const mode = s.mode || j.suggested_mode;
+  const device = s.device || "OPTIX";
+  let controls = "";
+  if (j.status === "needs_selection") {
+    controls = `<select data-k="pick">${j.candidates.map(c => `<option>${esc(c)}</option>`).join("")}</select><button data-a="select">Выбрать</button>`;
+  } else if (startable) {
+    controls = `
+      <select data-k="mode"><option value="animation" ${mode === "animation" ? "selected" : ""}>Анимация</option><option value="still" ${mode === "still" ? "selected" : ""}>Кадр</option></select>
+      <select data-k="device">${["OPTIX", "CUDA", "CPU"].map(d => `<option ${d === device ? "selected" : ""}>${d}</option>`).join("")}</select>
+      <input type="text" data-k="range" placeholder="кадр или 1:100" value="${esc(s.range || "")}" size="14">
+      ${missing.length ? `<label><input type="checkbox" data-k="allow" ${s.allow ? "checked" : ""}> без недостающих файлов</label>` : ""}
+      <button data-a="start">${j.status === "ready" ? "Рендер" : "Рендер заново"}</button>
+      ${(j.status === "failed" || j.status === "cancelled") && j.outputs.count ? `<button data-a="resume">Продолжить</button>` : ""}`;
+  } else if (j.status === "queued" || j.status === "rendering") {
+    controls = `<button data-a="cancel" ${j.cancelling ? "disabled" : ""}>Отменить</button>`;
+  }
+  const busy = ["preflight", "queued", "rendering"].includes(j.status);
+  if (!busy && j.outputs.count) controls += `<a class="btn" href="/api/jobs/${j.id}/download">Скачать (${j.outputs.count} файл., ${mb(j.outputs.bytes)})</a>`;
+  if (!["preflight", "rendering"].includes(j.status)) controls += `<button data-a="delete">Удалить</button>`;
+
+  const infoLine = j.info ? `${esc(i.engine)} · ${i.resolution[0]}×${i.resolution[1]} · ${i.samples ?? "?"} сэмплов · кадры ${i.frame_start}–${i.frame_end} · ${esc(i.format)} · Blender ${esc(j.blender?.version || "?")}` : "";
+  let line = "";
+  if (j.status === "rendering" || j.status === "queued" || j.progress.frames_done) {
+    const parts = [];
+    if (j.status === "queued") parts.push(`в очереди, позиция ${j.queue_position}`);
+    else {
+      parts.push(`кадр ${Math.min(p.frames_done + 1, p.total_frames)}/${p.total_frames}`);
+      if (p.sample) parts.push(`сэмпл ${p.sample}/${p.samples_total}`);
+      if (j.status === "rendering") parts.push(`осталось ~${clock(p.eta_seconds)}`);
+      parts.push(`прошло ${clock(p.elapsed_seconds)}`);
+    }
+    line = `<progress max="1" value="${p.percent}"></progress><div class="meta">${parts.join(" · ")}</div>`;
+  }
+  return `<div class="card" data-id="${j.id}">
+    <div class="head"><span class="name">${esc(j.name)}</span><span class="badge ${j.status}">${LABEL[j.status] || j.status}</span></div>
+    <div class="meta">${infoLine}</div>
+    ${(j.warnings || []).map(w => `<div class="warn">${esc(w)}</div>`).join("")}
+    ${missing.length ? `<div class="warn">Не найдено файлов: ${missing.length} (${esc(missing.slice(0, 3).map(m => m.name).join(", "))})</div>` : ""}
+    ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
+    ${j.project_deleted ? `<div class="warn">Файлы проекта удалены, остались только результаты</div>` : ""}
+    ${line}
+    <div class="row">${controls}</div>
+    ${j.last_preview ? `<img class="preview" src="/api/jobs/${j.id}/previews/${encodeURIComponent(j.last_preview)}">` : ""}
+  </div>`;
+}
+
+function draw() {
+  const a = document.activeElement;
+  if (a && jobsEl.contains(a) && ["SELECT", "INPUT"].includes(a.tagName)) return;
+  jobsEl.innerHTML = data.map(card).join("") || `<div class="meta">Загрузи .blend или .zip с текстурами</div>`;
+}
+
+async function refresh() {
+  try { data = await api("/api/jobs"); draw(); } catch (e) {}
+}
+
+jobsEl.addEventListener("input", e => {
+  const id = e.target.closest(".card")?.dataset.id, k = e.target.dataset.k;
+  if (!id || !k) return;
+  (ui[id] || (ui[id] = {}))[k === "allow" ? "allow" : k] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+});
+
+jobsEl.addEventListener("click", async e => {
+  const a = e.target.dataset.a, cardEl = e.target.closest(".card");
+  if (!a || !cardEl) return;
+  const id = cardEl.dataset.id, j = data.find(x => x.id === id), s = ui[id] || {};
+  try {
+    if (a === "select") await api(`/api/jobs/${id}/select`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({path: s.pick || j.candidates[0]})});
+    if (a === "cancel") await api(`/api/jobs/${id}/cancel`, {method: "POST"});
+    if (a === "delete" && confirm("Удалить задачу и результаты?")) await api(`/api/jobs/${id}`, {method: "DELETE"});
+    if (a === "start" || a === "resume") {
+      const body = {mode: s.mode || j.suggested_mode, device: s.device || "OPTIX", allow_missing: !!s.allow, resume: a === "resume"};
+      const r = (s.range || "").trim();
+      if (r) {
+        if (/^\d+:\d+$/.test(r) && body.mode === "animation") body.frames = r.split(":").map(Number);
+        else if (/^\d+$/.test(r) && body.mode === "still") body.frame = Number(r);
+        else return alert("Для кадра укажи число, для анимации диапазон вида 1:100");
+      }
+      await api(`/api/jobs/${id}/start`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    }
+  } catch (err) { alert(err.message); }
+  refresh();
+});
+
+document.getElementById("file").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const bar = document.getElementById("up"), msg = document.getElementById("upmsg");
+  const xhr = new XMLHttpRequest(), form = new FormData();
+  form.append("file", file);
+  bar.hidden = false; bar.value = 0; msg.textContent = "загрузка…";
+  xhr.upload.onprogress = ev => { if (ev.lengthComputable) bar.value = ev.loaded / ev.total; };
+  xhr.onload = () => {
+    bar.hidden = true; e.target.value = "";
+    if (xhr.status === 201) { msg.textContent = "загружено"; }
+    else { let m = xhr.statusText; try { m = JSON.parse(xhr.responseText).detail; } catch (x) {} msg.textContent = "ошибка: " + m; }
+    refresh();
+  };
+  xhr.onerror = () => { bar.hidden = true; msg.textContent = "ошибка сети"; };
+  xhr.open("POST", "/api/jobs");
+  xhr.send(form);
+});
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

@@ -7,9 +7,9 @@ import sys
 import tempfile
 import time
 
-import blendver
+from renderservice import blendver
 
-WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blender_wrapper.py")
+WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "renderservice", "blender_wrapper.py")
 SAMPLE_RE = re.compile(r"Sample (\d+)/(\d+)")
 REMAINING_RE = re.compile(r"Remaining:([\d:.]+)")
 
