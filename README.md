@@ -42,6 +42,8 @@ python render_cli.py ~/projects/scene/scene.blend --blender ~/blender/4.5.12/ble
 - `--device OPTIX|CUDA|CPU` устройство Cycles (по умолчанию OPTIX, при отсутствии GPU откат на CPU).
 - `--xvfb` запуск через виртуальный экран, нужен если EEVEE не стартует без дисплея.
 - `--out ПУТЬ` папка результата (по умолчанию `renders/` рядом с проектом).
+- `--frame N` номер кадра для режима `still` (по умолчанию текущий кадр проекта).
+- `--frames НАЧАЛО:КОНЕЦ` диапазон кадров для режима `animation` вместо диапазона проекта, например `--frames 1:3` для быстрого теста.
 
 Рядом с `renders/` появятся `render.log` (полный лог Blender) и `progress.json`.
 

@@ -161,6 +161,10 @@ def do_render(args, blend):
         "--progress", progress_path,
         "--addons", args.addons,
     ]
+    if args.frame is not None:
+        wrapper_args += ["--frame", str(args.frame)]
+    if args.frames:
+        wrapper_args += ["--frames", args.frames]
     cmd = build_command(args, blend, wrapper_args)
     print("запуск:", " ".join(cmd))
     started = time.time()
@@ -186,7 +190,11 @@ def main():
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--xvfb", action="store_true")
     parser.add_argument("--addons", default="")
+    parser.add_argument("--frame", type=int)
+    parser.add_argument("--frames")
     args = parser.parse_args()
+    if args.frames and not re.fullmatch(r"\d+:\d+", args.frames):
+        parser.error("--frames ожидает формат НАЧАЛО:КОНЕЦ, например 1:3")
 
     blend = os.path.abspath(args.blend)
     if not os.path.isfile(blend):

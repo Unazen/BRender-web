@@ -14,6 +14,14 @@ def say(message):
     print(f"[wrapper] {message}", flush=True)
 
 
+def parse_range(text):
+    start, end = text.split(":")
+    start, end = int(start), int(end)
+    if start > end:
+        raise ValueError("начало диапазона больше конца")
+    return start, end
+
+
 def parse_args():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser()
@@ -23,6 +31,8 @@ def parse_args():
     parser.add_argument("--progress")
     parser.add_argument("--preflight")
     parser.add_argument("--addons", default="")
+    parser.add_argument("--frame", type=int)
+    parser.add_argument("--frames", type=parse_range)
     return parser.parse_args(argv)
 
 
@@ -207,6 +217,10 @@ def main():
     say(f"устройство: {setup_device(scene, args.device)}")
     if args.out:
         configure_output(scene, args.out)
+    if args.frame is not None:
+        scene.frame_current = args.frame
+    if args.frames:
+        scene.frame_start, scene.frame_end = args.frames
 
     progress = Progress(args.progress, scene, args.mode)
     handlers = bpy.app.handlers
