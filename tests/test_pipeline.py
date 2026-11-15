@@ -1,7 +1,13 @@
+import functools
+import hashlib
+import http.server
 import io
+import os
 import shutil
 import sys
+import tarfile
 import tempfile
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -19,9 +25,9 @@ from renderservice.service import Service
 FAKE = Path(__file__).with_name("fake_blender.py")
 
 
-def make_settings(tmp, **extra):
+def make_settings(tmp, versions=("3.6.5", "4.5.12"), **extra):
     root = tmp / "blenders"
-    for version in ("3.6.5", "4.5.12"):
+    for version in versions:
         folder = root / f"blender-{version}-linux-x64"
         folder.mkdir(parents=True)
         target = folder / "blender"
@@ -70,6 +76,50 @@ def wait_until(check, timeout=30):
 def make_client(tmp, **extra):
     settings = make_settings(tmp, **extra)
     return TestClient(create_app(settings)), settings
+
+
+class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
+class FakeRelease:
+    def __init__(self, tmp, versions, wrong_hash=False, with_hash=True):
+        self.site = tmp / "site"
+        release = self.site / "release"
+        for version in versions:
+            series = ".".join(version.split(".")[:2])
+            folder = release / f"Blender{series}"
+            folder.mkdir(parents=True, exist_ok=True)
+            name = f"blender-{version}-linux-x64"
+            stage = tmp / "stage" / name
+            stage.mkdir(parents=True)
+            shutil.copy(FAKE, stage / "blender")
+            (stage / "blender").chmod(0o755)
+            (stage / "notes.txt").write_text("fake")
+            archive = folder / f"{name}.tar.xz"
+            with tarfile.open(archive, "w:xz") as bundle:
+                bundle.add(stage, arcname=name)
+            if with_hash:
+                digest = "0" * 64 if wrong_hash else hashlib.sha256(archive.read_bytes()).hexdigest()
+                (folder / f"blender-{version}.sha256").write_text(
+                    f"{digest}  {name}.tar.xz\n{'1' * 64}  blender-{version}-windows-x64.zip\n"
+                )
+        handler = functools.partial(QuietHandler, directory=str(self.site))
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def base(self):
+        return f"http://127.0.0.1:{self.server.server_address[1]}/release/"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def installed_versions(client):
+    return [item["version"] for item in client.get("/api/blenders").json()]
 
 
 def test_blend_render_and_download(tmp):
@@ -359,11 +409,170 @@ def test_index_and_blenders(tmp):
     with client:
         page = client.get("/")
         assert page.status_code == 200 and "BLENDER RENDER" in page.text
+        guide = client.get("/guide")
+        assert guide.status_code == 200 and "ПОДГОТОВИТЬ ПРОЕКТ" in guide.text
         assert [item["version"] for item in client.get("/api/blenders").json()] == ["3.6.5", "4.5.12"]
 
 
+def test_version_menu_download_and_remove(tmp):
+    release = FakeRelease(tmp, ["4.2.4", "4.2.5", "5.0.1"])
+    try:
+        client, settings = make_client(tmp, download_base=release.base, auto_install=False)
+        with client:
+            data = client.get("/api/blenders/catalog").json()
+            assert data["error"] is None
+            rows = {row["series"]: row for row in data["catalog"]}
+            assert rows["4.2"]["latest"] == "4.2.5" and rows["4.2"]["versions"] == ["4.2.5", "4.2.4"]
+            assert rows["5.0"]["latest"] == "5.0.1"
+            assert [item["version"] for item in data["installed"]] == ["3.6.5", "4.5.12"]
+
+            started = client.post("/api/blenders/download", json={"version": "4.2"})
+            assert started.status_code == 202, started.text
+            assert started.json()["version"] == "4.2.5"
+            wait_until(lambda: "4.2.5" in installed_versions(client))
+            target = settings.blender_root / "blender-4.2.5-linux-x64" / "blender"
+            assert target.is_file() and os.access(target, os.X_OK)
+            wait_until(lambda: not list(settings.blender_root.glob(".extract-*")))
+            wait_until(lambda: not client.get("/api/blenders/catalog").json()["downloads"])
+
+            again = client.post("/api/blenders/download", json={"version": "4.2"})
+            assert again.status_code == 202 and again.json()["state"] == "done"
+            assert client.post("/api/blenders/download", json={"version": "9.9"}).status_code == 502
+            assert client.post("/api/blenders/download", json={"version": "abc"}).status_code == 400
+
+            assert client.delete("/api/blenders/4.2.5").status_code == 200
+            assert not (settings.blender_root / "blender-4.2.5-linux-x64").exists()
+            assert client.delete("/api/blenders/4.2.5").status_code == 404
+    finally:
+        release.close()
+
+
+def test_download_rejects_wrong_checksum(tmp):
+    release = FakeRelease(tmp, ["4.2.5"], wrong_hash=True)
+    try:
+        client, settings = make_client(tmp, download_base=release.base, auto_install=False)
+        with client:
+            assert client.post("/api/blenders/download", json={"version": "4.2.5"}).status_code == 202
+            failed = wait_until(
+                lambda: next(
+                    (d for d in client.get("/api/blenders/catalog").json()["downloads"] if d["state"] == "failed"),
+                    None,
+                )
+            )
+            assert "Контрольная сумма" in failed["error"]
+            assert not (settings.blender_root / "blender-4.2.5-linux-x64").exists()
+            wait_until(lambda: not list((settings.blender_root / ".downloads").glob("*")))
+            wait_until(lambda: not list(settings.blender_root.glob(".extract-*")))
+    finally:
+        release.close()
+
+
+def test_download_without_checksum_file(tmp):
+    release = FakeRelease(tmp, ["4.2.5"], with_hash=False)
+    try:
+        client, settings = make_client(tmp, download_base=release.base, auto_install=False)
+        with client:
+            assert client.post("/api/blenders/download", json={"version": "4.2.5"}).status_code == 202
+            wait_until(lambda: "4.2.5" in installed_versions(client))
+    finally:
+        release.close()
+
+
+def test_auto_install_during_preflight(tmp):
+    release = FakeRelease(tmp, ["4.5.12"])
+    try:
+        client, settings = make_client(tmp, versions=(), download_base=release.base, auto_install=True)
+        with client:
+            assert installed_versions(client) == []
+            job_id = upload(client, "a.blend", blend(marker=b"STILL")).json()["id"]
+            job = wait_status(client, job_id, {"ready", "failed"})
+            assert job["status"] == "ready", job
+            assert job["blender"]["version"] == "4.5.12"
+            assert job["warnings"] == []
+            assert job["install"] is None
+            assert installed_versions(client) == ["4.5.12"]
+            started = client.post(f"/api/jobs/{job_id}/start", json={})
+            assert started.status_code == 200, started.text
+            assert wait_status(client, job_id, {"done", "failed"})["status"] == "done"
+    finally:
+        release.close()
+
+
+def test_auto_install_failure_falls_back_to_installed(tmp):
+    client, settings = make_client(
+        tmp, versions=("4.5.12",), download_base="http://127.0.0.1:9/release/", auto_install=True
+    )
+    with client:
+        job_id = upload(client, "old.blend", blend("BLENDER-v306", b"STILL")).json()["id"]
+        job = wait_status(client, job_id, {"ready", "failed"}, timeout=60)
+        assert job["status"] == "ready", job
+        assert job["blender"]["version"] == "4.5.12"
+        assert any("Не удалось скачать" in text for text in job["warnings"])
+        assert any("не установлен" in text for text in job["warnings"])
+
+
+def test_no_blender_anywhere_names_the_folder(tmp):
+    client, settings = make_client(
+        tmp, versions=(), download_base="http://127.0.0.1:9/release/", auto_install=True
+    )
+    with client:
+        job_id = upload(client, "a.blend", blend(marker=b"STILL")).json()["id"]
+        job = wait_status(client, job_id, {"failed", "ready"}, timeout=60)
+        assert job["status"] == "failed"
+        assert str(settings.blender_root) in job["error"]
+        assert "Версии Blender" in job["error"]
+
+
+def test_auto_install_disabled_does_not_download(tmp):
+    client, settings = make_client(tmp, versions=("4.5.12",), auto_install=False)
+    with client:
+        job_id = upload(client, "old.blend", blend("BLENDER-v306", b"STILL")).json()["id"]
+        job = wait_status(client, job_id, {"ready", "failed"})
+        assert job["status"] == "ready" and job["blender"]["version"] == "4.5.12"
+        assert job["warnings"] and not any("скачать" in text for text in job["warnings"])
+        assert client.app.state.service.installer.statuses() == []
+
+
+def test_catalog_offline_reports_error(tmp):
+    client, settings = make_client(tmp, download_base="http://127.0.0.1:9/release/", auto_install=False)
+    with client:
+        response = client.get("/api/blenders/catalog")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["error"] and data["catalog"] == []
+        assert len(data["installed"]) == 2
+
+
+def test_explicit_blender_override(tmp):
+    client, settings = make_client(tmp, auto_install=False)
+    with client:
+        job_id = upload(client, "o.blend", blend(marker=b"STILL")).json()["id"]
+        wait_status(client, job_id, {"ready"})
+        assert client.post(f"/api/jobs/{job_id}/start", json={"blender": "4.0"}).status_code == 409
+        accepted = client.post(f"/api/jobs/{job_id}/start", json={"blender": "3.6"})
+        assert accepted.status_code == 200, accepted.text
+        job = wait_status(client, job_id, {"done", "failed"})
+        assert job["status"] == "done" and job["blender"]["version"] == "3.6.5"
+
+
+def test_discover_root_and_unnamed_folders(tmp):
+    root = tmp / "root"
+
+    def fake(folder, text):
+        folder.mkdir(parents=True, exist_ok=True)
+        script = folder / "blender"
+        script.write_text(f"#!/bin/sh\necho 'Blender {text}'\n")
+        script.chmod(0o755)
+
+    fake(root, "4.5.3")
+    fake(root / "custom", "3.6.9")
+    fake(root / "blender-4.2.1-linux-x64", "0.0.0")
+    fake(root / ".hidden", "2.0.0")
+    assert [item["version"] for item in blenders.discover(root)] == [(3, 6, 9), (4, 2, 1), (4, 5, 3)]
+
+
 def main():
-    tests = [(name, func) for name, func in sorted(globals().items()) if name.startswith("test_")]
+    tests =[(name, func) for name, func in sorted(globals().items()) if name.startswith("test_")]
     failed = 0
     for name, func in tests:
         folder = Path(tempfile.mkdtemp(prefix="render-test-"))

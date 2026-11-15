@@ -26,6 +26,10 @@ class SelectBody(BaseModel):
     path: str
 
 
+class DownloadBody(BaseModel):
+    version: str
+
+
 @asynccontextmanager
 async def lifespan(app):
     service = app.state.service
@@ -52,9 +56,26 @@ def create_app(settings=None):
 
     app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
 
+    @app.get("/guide")
+    def guide():
+        return FileResponse(settings.static_dir / "guide.html")
+
     @app.get("/api/blenders")
     def blenders_list():
         return service.blenders_info()
+
+    @app.get("/api/blenders/catalog")
+    def blenders_catalog(refresh: bool = False):
+        return service.blender_catalog(refresh)
+
+    @app.post("/api/blenders/download", status_code=202)
+    def blenders_download(body: DownloadBody):
+        return service.download_blender(body.version)
+
+    @app.delete("/api/blenders/{version}")
+    def blenders_delete(version: str):
+        service.remove_blender(version)
+        return {"ok": True}
 
     @app.get("/api/jobs")
     def jobs_list():

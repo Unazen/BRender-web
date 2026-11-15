@@ -1,8 +1,12 @@
 import re
+import subprocess
 from pathlib import Path
 
 NAME_RE = re.compile(r"^blender-(\d+)\.(\d+)\.(\d+)")
 SERIES_RE = re.compile(r"(\d+)\.(\d+)(?:\.\d+)?")
+VERSION_RE = re.compile(r"Blender (\d+)\.(\d+)(?:\.(\d+))?")
+
+_version_cache = {}
 
 
 def label(version):
@@ -16,17 +20,47 @@ def parse_series(text):
     return int(match.group(1)), int(match.group(2))
 
 
+def _query_version(executable):
+    key = (str(executable), executable.stat().st_mtime)
+    if key in _version_cache:
+        return _version_cache[key]
+    version = None
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"], capture_output=True, text=True, errors="replace", timeout=30
+        )
+        match = VERSION_RE.search(result.stdout)
+        if match:
+            version = (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    _version_cache[key] = version
+    return version
+
+
+def _identify(folder):
+    executable = folder / "blender"
+    if not executable.is_file():
+        return None
+    match = NAME_RE.match(folder.name)
+    version = tuple(int(part) for part in match.groups()) if match else _query_version(executable)
+    if version is None:
+        return None
+    return {"version": version, "path": str(executable)}
+
+
 def discover(root):
     root = Path(root)
     found = []
     if not root.is_dir():
         return found
-    for entry in root.iterdir():
-        match = NAME_RE.match(entry.name)
-        executable = entry / "blender"
-        if match and executable.is_file():
-            version = tuple(int(part) for part in match.groups())
-            found.append({"version": version, "path": str(executable)})
+    folders = [root] + sorted(
+        path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")
+    )
+    for folder in folders:
+        item = _identify(folder)
+        if item:
+            found.append(item)
     found.sort(key=lambda item: item["version"])
     return found
 

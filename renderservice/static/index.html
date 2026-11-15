@@ -27,11 +27,23 @@
   button { cursor: pointer; }
   button:hover { border-color: #e8b04a; }
   a.btn { color: #0c0e11; background: #e8b04a; padding: 6px 12px; text-decoration: none; }
+  a { color: #e8b04a; }
+  details { border: 1px solid #262c35; background: #12161b; padding: 10px 14px; margin-bottom: 20px; }
+  summary { cursor: pointer; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  td, th { text-align: left; padding: 6px 8px; border-top: 1px solid #262c35; vertical-align: middle; }
+  .ok { color: #58c47a; }
+  button.small { padding: 2px 8px; font-size: 12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>BLENDER RENDER</h1>
+  <p class="meta"><a href="/guide">Как подготовить проект перед загрузкой</a></p>
+  <details id="versions">
+    <summary>Версии Blender</summary>
+    <div id="versions-body" class="meta">загрузка…</div>
+  </details>
   <div class="drop">
     <input type="file" id="file" accept=".blend,.zip">
     <progress id="up" max="1" value="0" hidden style="width:200px"></progress>
@@ -103,6 +115,7 @@ function card(j) {
   return `<div class="card" data-id="${j.id}">
     <div class="head"><span class="name">${esc(j.name)}</span><span class="badge ${j.status}">${LABEL[j.status] || j.status}</span></div>
     <div class="meta">${infoLine}</div>
+    ${j.install ? `<div class="warn">Скачивание Blender ${esc(j.install.version)}: ${esc(dlText(j.install))}</div>` : ""}
     ${(j.warnings || []).map(w => `<div class="warn">${esc(w)}</div>`).join("")}
     ${missing.length ? `<div class="warn">Не найдено файлов: ${missing.length} (${esc(missing.slice(0, 3).map(m => m.name).join(", "))})</div>` : ""}
     ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
@@ -169,6 +182,89 @@ document.getElementById("file").addEventListener("change", e => {
   xhr.open("POST", "/api/jobs");
   xhr.send(form);
 });
+
+function dlText(d) {
+  if (d.state === "queued") return "в очереди";
+  if (d.state === "extracting") return "распаковка";
+  if (d.state === "failed") return d.error || "ошибка";
+  const pct = d.total ? Math.round(d.downloaded / d.total * 100) + "% " : "";
+  return `скачивание ${pct}(${mb(d.downloaded)}${d.total ? " из " + mb(d.total) : ""})`;
+}
+
+const versionKey = v => v.split(".").map(Number);
+const versionCmp = (a, b) => {
+  const x = versionKey(a), y = versionKey(b);
+  return y[0] - x[0] || y[1] - x[1] || (y[2] || 0) - (x[2] || 0);
+};
+const seriesOf = v => v.split(".").slice(0, 2).join(".");
+
+const versionsEl = document.getElementById("versions");
+const versionsBody = document.getElementById("versions-body");
+let catalog = null, catalogBusy = false;
+
+async function loadCatalog(refresh) {
+  if (catalogBusy) return;
+  catalogBusy = true;
+  try {
+    catalog = await api("/api/blenders/catalog" + (refresh ? "?refresh=1" : ""));
+    drawCatalog();
+  } catch (e) {
+    versionsBody.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  } finally {
+    catalogBusy = false;
+  }
+}
+
+function drawCatalog() {
+  const c = catalog;
+  const have = {};
+  c.installed.forEach(i => (have[seriesOf(i.version)] ||= []).push(i.version));
+  const downloads = {};
+  c.downloads.forEach(d => (downloads[d.series] ||= []).push(d));
+  const rows = c.catalog.map(e => ({series: e.series, latest: e.latest}));
+  Object.keys(have).forEach(s => { if (!rows.some(r => r.series === s)) rows.push({series: s, latest: null}); });
+  rows.sort((a, b) => versionCmp(a.series, b.series));
+
+  const body = rows.map(r => {
+    const installed = (have[r.series] || []).sort(versionCmp).map(v =>
+      `<span class="ok">${esc(v)}</span> <button class="small" data-del="${esc(v)}">удалить</button>`).join("<br>");
+    const active = (downloads[r.series] || [])[0];
+    let action = "";
+    if (active) {
+      action = `<span class="${active.state === "failed" ? "err" : "warn"}">${esc(active.version)}: ${esc(dlText(active))}</span>` +
+        (active.state === "failed" && r.latest ? ` <button class="small" data-dl="${esc(r.latest)}">повторить</button>` : "");
+    } else if (r.latest && !(have[r.series] || []).includes(r.latest)) {
+      action = `<button class="small" data-dl="${esc(r.latest)}">Скачать ${esc(r.latest)}</button>`;
+    } else if (r.latest) {
+      action = `<span class="meta">актуальная</span>`;
+    }
+    return `<tr><td>${esc(r.series)}</td><td>${esc(r.latest || "—")}</td><td>${installed || "—"}</td><td>${action}</td></tr>`;
+  }).join("");
+
+  versionsBody.innerHTML = `
+    <div class="meta">Папка с версиями: ${esc(c.root)} · автоскачивание нужной версии при загрузке проекта: ${c.auto_install ? "включено" : "выключено"}
+      <button class="small" data-refresh="1">Обновить список</button></div>
+    ${c.error ? `<div class="warn">${esc(c.error)}</div>` : ""}
+    <table><tr><th>Серия</th><th>Последняя</th><th>Установлено</th><th></th></tr>${body}</table>`;
+}
+
+versionsBody.addEventListener("click", async e => {
+  const t = e.target;
+  try {
+    if (t.dataset.refresh) return loadCatalog(true);
+    if (t.dataset.dl) {
+      await api("/api/blenders/download", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({version: t.dataset.dl})});
+      return loadCatalog(false);
+    }
+    if (t.dataset.del && confirm(`Удалить Blender ${t.dataset.del} с сервера?`)) {
+      await api("/api/blenders/" + encodeURIComponent(t.dataset.del), {method: "DELETE"});
+      return loadCatalog(false);
+    }
+  } catch (err) { alert(err.message); }
+});
+
+versionsEl.addEventListener("toggle", () => { if (versionsEl.open) loadCatalog(false); });
+setInterval(() => { if (versionsEl.open) loadCatalog(false); }, 2000);
 
 refresh();
 setInterval(refresh, 2000);

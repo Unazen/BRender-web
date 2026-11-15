@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import blenders, blendver, cleanup, progress, runner, storage, thumbs
 from .db import Database
+from .installer import ACTIVE_STATES, MIN_SERIES, InstallError, Installer
 from .worker import Worker
 
 DEVICES = {"OPTIX", "CUDA", "CPU"}
@@ -32,6 +33,7 @@ class Service:
         self.db = Database(settings.db_path)
         self.worker = Worker(self)
         self.preflight_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="preflight")
+        self.installer = Installer(settings, self.installed)
         self.stop_event = threading.Event()
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, name="cleanup", daemon=True)
 
@@ -45,6 +47,7 @@ class Service:
         self.stop_event.set()
         self.worker.stop()
         self.preflight_pool.shutdown(wait=False, cancel_futures=True)
+        self.installer.pool.shutdown(wait=False, cancel_futures=True)
         self.db.close()
 
     def _cleanup_loop(self):
@@ -91,6 +94,7 @@ class Service:
             finished=time.time(),
             error=message,
             error_log=tail or [],
+            install_version=None,
             cancelling=False,
         )
 
@@ -192,10 +196,17 @@ class Service:
             blend = paths.project / job["blend"]
             try:
                 series = blendver.read_version(blend)
-                resolved, warnings = blenders.resolve(self.installed(), series)
-            except (ValueError, LookupError, RuntimeError) as exc:
+            except (ValueError, RuntimeError) as exc:
                 self.fail(job_id, str(exc))
                 return
+            note = self._ensure_series(job_id, series)
+            try:
+                resolved, warnings = blenders.resolve(self.installed(), series)
+            except LookupError:
+                self.fail(job_id, self.no_blender_message(note))
+                return
+            if note:
+                warnings.append(f"Не удалось скачать Blender {blenders.label(series)}: {note}")
             try:
                 paths.preflight.unlink()
             except FileNotFoundError:
@@ -225,6 +236,7 @@ class Service:
             self.db.update(
                 job_id,
                 status="ready",
+                install_version=None,
                 info=info,
                 project_version=blenders.label(series),
                 blender={"version": resolved["version"], "path": resolved["path"]},
@@ -271,13 +283,16 @@ class Service:
             if mode == "animation" and frame is not None:
                 raise ServiceError(400, "Номер кадра задаётся только для одного кадра")
 
+            requested = body.get("blender")
             try:
                 series = blendver.read_version(blend)
-                resolved, warnings = blenders.resolve(self.installed(), series, body.get("blender"))
+                resolved, warnings = blenders.resolve(self.installed(), series, requested)
             except ValueError as exc:
                 raise ServiceError(400, str(exc))
-            except LookupError as exc:
-                raise ServiceError(409, str(exc))
+            except LookupError:
+                raise ServiceError(409, self.no_blender_message())
+            if requested and tuple(int(part) for part in resolved["version"].split(".")[:2]) != blenders.parse_series(requested):
+                raise ServiceError(409, f"Blender {requested} не установлен, скачайте его в разделе «Версии Blender»")
 
             resume = bool(body.get("resume"))
             if not resume:
@@ -381,6 +396,12 @@ class Service:
             data["previews"] = previews
         info = job.get("info") or {}
         data["suggested_mode"] = "animation" if info.get("frame_end", 1) > info.get("frame_start", 1) else "still"
+        data["install"] = None
+        if job.get("install_version") and job["status"] == "preflight":
+            data["install"] = next(
+                (state for state in self.installer.statuses() if state["version"] == job["install_version"]),
+                None,
+            )
         data["queue_position"] = self.queue_position(job)
         return data
 
@@ -393,3 +414,68 @@ class Service:
 
     def blenders_info(self):
         return [{"version": blenders.label(item["version"]), "path": item["path"]} for item in self.installed()]
+
+    def no_blender_message(self, note=None):
+        text = f"Не найдено ни одной версии Blender в папке {self.settings.blender_root}"
+        if note:
+            text += f" ({note})"
+        return text + ". Скачайте нужную версию в разделе «Версии Blender» или укажите папку через RENDER_BLENDER_ROOT"
+
+    def _ensure_series(self, job_id, series):
+        if not self.settings.auto_install or series < MIN_SERIES:
+            return None
+        if any(item["version"][:2] == series for item in self.installed()):
+            return None
+        try:
+            future, state = self.installer.install(blenders.label(series))
+            if future is None:
+                return None
+            self.db.update(job_id, install_version=state["version"])
+            future.result()
+        except InstallError as exc:
+            return str(exc)
+        finally:
+            self.db.update(job_id, install_version=None)
+        if state["state"] != "done":
+            return state["error"] or "установка не удалась"
+        return None
+
+    def blender_catalog(self, refresh=False):
+        entries, error = self.installer.catalog(force=refresh)
+        now = time.time()
+        downloads = [
+            state
+            for state in self.installer.statuses()
+            if state["state"] in ACTIVE_STATES or (state["state"] == "failed" and now - state["started"] < 3600)
+        ]
+        return {
+            "root": str(self.settings.blender_root),
+            "auto_install": self.settings.auto_install,
+            "installed": self.blenders_info(),
+            "catalog": entries,
+            "downloads": downloads,
+            "error": error,
+        }
+
+    def download_blender(self, text):
+        try:
+            future, state = self.installer.install(text)
+        except ValueError as exc:
+            raise ServiceError(400, str(exc))
+        except InstallError as exc:
+            raise ServiceError(502, str(exc))
+        return dict(state)
+
+    def remove_blender(self, version):
+        entry = next((item for item in self.installed() if blenders.label(item["version"]) == version), None)
+        if entry is None:
+            raise ServiceError(404, "Такая версия не установлена")
+        folder = Path(entry["path"]).parent.resolve()
+        root = Path(self.settings.blender_root).resolve()
+        if folder == root or root not in folder.parents:
+            raise ServiceError(409, "Эта установка лежит вне папки версий или прямо в ней, удалите её вручную")
+        for job in self.db.list():
+            if job["status"] in ("preflight", "queued", "rendering") and (job.get("blender") or {}).get("version") == version:
+                raise ServiceError(409, "Эта версия сейчас используется задачей")
+        storage.rmtree(folder)
+        self.installer.forget(version)
