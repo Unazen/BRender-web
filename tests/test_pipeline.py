@@ -408,9 +408,9 @@ def test_index_and_blenders(tmp):
     client, settings = make_client(tmp)
     with client:
         page = client.get("/")
-        assert page.status_code == 200 and "BLENDER RENDER" in page.text
+        assert page.status_code == 200 and "Рендер Blender" in page.text
         guide = client.get("/guide")
-        assert guide.status_code == 200 and "ПОДГОТОВИТЬ ПРОЕКТ" in guide.text
+        assert guide.status_code == 200 and "Как подготовить проект" in guide.text
         assert [item["version"] for item in client.get("/api/blenders").json()] == ["3.6.5", "4.5.12"]
 
 
@@ -592,6 +592,30 @@ def main():
             shutil.rmtree(folder, ignore_errors=True)
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     return 1 if failed else 0
+
+
+def test_status_endpoint(tmp):
+    client, settings = make_client(tmp, auto_install=False)
+    with client:
+        idle = client.get("/api/status").json()
+        assert idle["rendering"] is None and idle["queued"] == 0 and idle["jobs"] == 0
+        assert idle["disk_free"] > 0
+        job_id = upload(client, "s.blend", blend(marker=b"SLOW")).json()["id"]
+        wait_status(client, job_id, {"ready"})
+        client.post(f"/api/jobs/{job_id}/start", json={"mode": "animation"})
+        wait_status(client, job_id, {"rendering"})
+        busy = client.get("/api/status").json()
+        assert busy["rendering"] == "s" and busy["jobs"] == 1
+        client.post(f"/api/jobs/{job_id}/cancel")
+        wait_status(client, job_id, {"cancelled", "failed", "done"})
+
+
+def test_static_assets_served(tmp):
+    client, settings = make_client(tmp, auto_install=False)
+    with client:
+        for path in ["/", "/guide", "/static/js/app.js", "/static/js/glyphs.js", "/static/css/theme.css", "/static/css/fonts.css",
+                     "/static/fonts/tektur-cyrillic-900-normal.woff2", "/static/fonts/martian-mono-latin-400-normal.woff2"]:
+            assert client.get(path).status_code == 200, path
 
 
 if __name__ == "__main__":

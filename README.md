@@ -1,8 +1,10 @@
-# Blender Render Service (этап 1: бэкенд)
+# Blender Render Service (этапы 1–3: бэкенд, версии, интерфейс)
 
 Локальный сервис удалённого рендера. Загружаешь `.blend` или `.zip` с текстурами, сервер сам выбирает версию Blender, проверяет проект, ставит рендер в очередь, показывает прогресс и превью кадров, потом отдаёт результат.
 
-Страница `/` пока служебная: она нужна, чтобы пользоваться сервисом уже сейчас. Настоящий интерфейс будет на этапе 2.
+Интерфейс на `/` сделан в стиле Marathon: чёрный фон, кислотно-зелёный, шрифты Tektur (заголовки) и Martian Mono (текст). Анимация: поле символов в шапке, полоса прогресса из тех же символов, рамки трекинга поверх превью во время рендера. При включённом в системе «уменьшении движения» анимации отключаются.
+
+Шрифты лежат в `renderservice/static/fonts/` вместе с лицензиями (SIL OFL), интернет для интерфейса не нужен.
 
 ## Установка (Arch)
 
@@ -65,7 +67,7 @@ python run.py
 
 ## API
 
-`GET /api/jobs`, `POST /api/jobs` (файл в поле `file`), `GET /api/jobs/{id}`, `POST /api/jobs/{id}/select`, `POST /api/jobs/{id}/start`, `POST /api/jobs/{id}/cancel`, `DELETE /api/jobs/{id}`, `GET /api/jobs/{id}/download`, `GET /api/jobs/{id}/log`, `GET /api/jobs/{id}/events` (SSE), `GET /api/jobs/{id}/previews/{имя}`, `GET /api/blenders` (установленные версии), `GET /api/blenders/catalog` (установленные, доступные для скачивания и текущие загрузки), `POST /api/blenders/download` (`{"version": "4.5"}` или `{"version": "4.5.12"}`), `DELETE /api/blenders/{версия}`, страница-инструкция `GET /guide`.
+`GET /api/status` (что рендерится, длина очереди, место на диске), `GET /api/jobs`, `POST /api/jobs` (файл в поле `file`), `GET /api/jobs/{id}`, `POST /api/jobs/{id}/select`, `POST /api/jobs/{id}/start`, `POST /api/jobs/{id}/cancel`, `DELETE /api/jobs/{id}`, `GET /api/jobs/{id}/download`, `GET /api/jobs/{id}/log`, `GET /api/jobs/{id}/events` (SSE), `GET /api/jobs/{id}/previews/{имя}`, `GET /api/blenders` (установленные версии), `GET /api/blenders/catalog` (установленные, доступные для скачивания и текущие загрузки), `POST /api/blenders/download` (`{"version": "4.5"}` или `{"version": "4.5.12"}`), `DELETE /api/blenders/{версия}`, страница-инструкция `GET /guide`.
 
 Пример запуска из консоли:
 

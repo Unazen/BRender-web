@@ -56,6 +56,10 @@ def create_app(settings=None):
 
     app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
 
+    @app.get("/api/status")
+    def server_status():
+        return service.status()
+
     @app.get("/guide")
     def guide():
         return FileResponse(settings.static_dir / "guide.html")

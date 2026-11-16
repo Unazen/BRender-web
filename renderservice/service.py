@@ -1,6 +1,7 @@
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import threading
 import time
@@ -414,6 +415,17 @@ class Service:
 
     def blenders_info(self):
         return [{"version": blenders.label(item["version"]), "path": item["path"]} for item in self.installed()]
+
+    def status(self):
+        jobs = self.db.list()
+        rendering = next((job for job in jobs if job["status"] == "rendering"), None)
+        usage = shutil.disk_usage(self.settings.data_dir)
+        return {
+            "rendering": rendering["name"] if rendering else None,
+            "queued": sum(1 for job in jobs if job["status"] == "queued"),
+            "jobs": len(jobs),
+            "disk_free": usage.free,
+        }
 
     def no_blender_message(self, note=None):
         text = f"Не найдено ни одной версии Blender в папке {self.settings.blender_root}"
