@@ -594,6 +594,136 @@ def main():
     return 1 if failed else 0
 
 
+PREFS = (
+    b"BLENDER-pref\nADDON:cycles\nADDON:node_wrangler\nADDON:my_addon\n"
+    b"ADDON:bl_ext.blender_org.good_ext\nADDON:bl_ext.blender_org.nonexistent_x\n"
+)
+
+
+def prefs_upload(client, content=PREFS, name="userpref.blend"):
+    return client.post("/api/setup/prefs", files={"file": (name, content, "application/octet-stream")})
+
+
+def addon_upload(client, name, content):
+    return client.post("/api/setup/addons", files={"file": (name, content, "application/octet-stream")})
+
+
+def addons_of(client):
+    return {item["module"]: item for item in client.get("/api/setup").json()["addons"]}
+
+
+def test_setup_scan_and_auto_install(tmp):
+    client, settings = make_client(tmp)
+    with client:
+        first = client.get("/api/setup").json()
+        assert first["needs_setup"] is True and first["addons"] == [] and first["has_blender"] is True
+        state = prefs_upload(client).json()
+        found = {item["module"]: item for item in state["addons"]}
+        assert found["cycles"]["origin"] == "bundled" and found["cycles"]["status"] == "ok"
+        assert found["my_addon"]["status"] == "missing"
+        assert state["prefs"]["name"] == "userpref.blend"
+        wait_until(lambda: addons_of(client)["bl_ext.blender_org.good_ext"]["status"] == "ok")
+        wait_until(lambda: addons_of(client)["bl_ext.blender_org.nonexistent_x"]["status"] == "failed")
+        final = addons_of(client)
+        assert final["bl_ext.blender_org.good_ext"]["origin"] == "extension"
+        assert "not found" in final["bl_ext.blender_org.nonexistent_x"]["message"]
+        resolved = addon_upload(client, "my_addon.zip", zip_bytes({"my_addon/__init__.py": "x = 1"})).json()
+        mine = {item["module"]: item for item in resolved["addons"]}["my_addon"]
+        assert mine["origin"] == "user" and mine["status"] == "ok" and mine["enabled"] is True
+
+
+def test_addons_reach_blender(tmp):
+    client, settings = make_client(tmp)
+    with client:
+        prefs_upload(client)
+        wait_until(lambda: addons_of(client)["bl_ext.blender_org.good_ext"]["status"] == "ok")
+        addon_upload(client, "my_addon.py", b"x = 1")
+        job_id = upload(client, "a.blend", blend(marker=b"STILL")).json()["id"]
+        wait_status(client, job_id, {"ready"})
+        client.post(f"/api/jobs/{job_id}/start", json={"mode": "still", "device": "CPU"})
+        job = wait_status(client, job_id, {"done", "failed"})
+        assert job["status"] == "done"
+        assert "my_addon" in job["addons"] and "bl_ext.blender_org.good_ext" in job["addons"]
+        assert "bl_ext.blender_org.nonexistent_x" not in job["addons"]
+        log = client.get(f"/api/jobs/{job_id}/log").text
+        assert "addons=" in log and "blender-user" in log and "good_ext" in log
+        client.post("/api/setup/addons/my_addon/enabled", json={"enabled": False})
+        client.post(f"/api/jobs/{job_id}/start", json={"mode": "still", "device": "CPU"})
+        wait_status(client, job_id, {"done", "failed"})
+        assert "disabled=cycles" not in client.get(f"/api/jobs/{job_id}/log").text
+        assert "my_addon" in client.get(f"/api/jobs/{job_id}/log").text.split("disabled=")[1].split("\n")[0]
+        old = upload(client, "old.blend", blend(header="BLENDER-v306", marker=b"STILL")).json()["id"]
+        wait_status(client, old, {"ready"})
+        client.post(f"/api/jobs/{old}/start", json={"mode": "still", "device": "CPU"})
+        finished = wait_status(client, old, {"done", "failed"})
+        assert finished["status"] == "done"
+        assert all(not name.startswith("bl_ext.") for name in finished["addons"])
+
+
+def test_failed_addon_becomes_warning(tmp):
+    client, settings = make_client(tmp)
+    with client:
+        prefs_upload(client, b"BLENDER-pref\n")
+        addon_upload(client, "broken_one.py", b"raise Exception")
+        job_id = upload(client, "w.blend", blend(marker=b"STILL")).json()["id"]
+        job = wait_status(client, job_id, {"ready"})
+        assert any("broken_one" in text for text in job["warnings"])
+
+
+def test_prefs_zip_with_addons_and_validation(tmp):
+    client, settings = make_client(tmp)
+    with client:
+        archive = zip_bytes({
+            "Blender/4.5/config/userpref.blend": b"BLENDER-pref\nADDON:zipped_addon\nADDON:bl_ext.user_default.ext_one\n",
+            "Blender/4.5/scripts/addons/zipped_addon.py": "x = 1",
+            "Blender/4.5/extensions/user_default/ext_one/__init__.py": "",
+            "Blender/4.5/extensions/user_default/ext_one/blender_manifest.toml": 'id = "ext_one"\n',
+        })
+        state = prefs_upload(client, archive, "config.zip").json()
+        found = {item["module"]: item for item in state["addons"]}
+        assert found["zipped_addon"]["origin"] == "user" and found["zipped_addon"]["status"] == "ok"
+        assert found["bl_ext.user_default.ext_one"]["origin"] == "extension"
+        assert prefs_upload(client, zip_bytes({"a/b.txt": "x"}), "bad.zip").status_code == 400
+        assert prefs_upload(client, zip_bytes({"../evil/userpref.blend": b"BLENDER"}), "slip.zip").status_code == 400
+        assert prefs_upload(client, b"plain text", "userpref.blend").status_code == 400
+        assert prefs_upload(client, PREFS, "notes.txt").status_code == 400
+        assert addon_upload(client, "bad-name.py", b"x").status_code == 400
+        assert addon_upload(client, "empty.zip", zip_bytes({"readme.txt": "x"})).status_code == 400
+        assert addon_upload(client, "a.txt", b"x").status_code == 400
+        manifest = zip_bytes({"pack/blender_manifest.toml": 'id = "pack_ext"\n', "pack/__init__.py": ""})
+        added = {item["module"] for item in addon_upload(client, "pack.zip", manifest).json()["addons"]}
+        assert "bl_ext.user_default.pack_ext" in added
+
+
+def test_setup_flags_enable_and_remove(tmp):
+    client, settings = make_client(tmp)
+    with client:
+        prefs_upload(client)
+        wait_until(lambda: not client.get("/api/setup").json()["busy"])
+        addon_upload(client, "mine.py", b"x = 1")
+        assert client.post("/api/setup/addons/nothing/enabled", json={"enabled": True}).status_code == 404
+        assert client.delete("/api/setup/addons/cycles").status_code == 400
+        removed = client.delete("/api/setup/addons/mine").json()
+        assert "mine" not in {item["module"] for item in removed["addons"]}
+        assert not (settings.user_dir / "scripts" / "addons" / "mine.py").exists()
+        client.delete("/api/setup/addons/my_addon")
+        assert "my_addon" not in addons_of(client)
+        assert "my_addon" not in {item["module"] for item in client.post("/api/setup/rescan").json()["addons"]}
+        assert client.post("/api/setup/done", json={"skipped": True}).json()["needs_setup"] is False
+        done = client.post("/api/setup/done", json={}).json()
+        assert done["configured"] is True and done["skipped"] is False
+        reset = client.delete("/api/setup/prefs").json()
+        assert reset["prefs"] is None
+
+
+def test_setup_needs_blender(tmp):
+    client, settings = make_client(tmp, versions=())
+    with client:
+        assert client.get("/api/setup").json()["has_blender"] is False
+        response = prefs_upload(client)
+        assert response.status_code == 409 and "Blender" in response.json()["detail"]
+
+
 def test_status_endpoint(tmp):
     client, settings = make_client(tmp, auto_install=False)
     with client:

@@ -29,10 +29,73 @@ def write_json(path, data):
     os.replace(temporary, path)
 
 
+def user_dirs():
+    return (
+        os.environ.get("BLENDER_USER_CONFIG", ""),
+        os.environ.get("BLENDER_USER_SCRIPTS", ""),
+        os.environ.get("BLENDER_USER_EXTENSIONS", ""),
+    )
+
+
+def scan(target):
+    config, scripts, extensions = user_dirs()
+    enabled = []
+    prefs = os.path.join(config, "userpref.blend")
+    if os.path.isfile(prefs):
+        with open(prefs, "rb") as handle:
+            for line in handle.read().decode("utf-8", "replace").splitlines():
+                if line.startswith("ADDON:"):
+                    enabled.append(line[6:].strip())
+    modules = [
+        {"module": name, "name": name.replace("_", " ").title(), "version": "1.0.0", "path": f"/fake/blender/scripts/addons/{name}"}
+        for name in ("cycles", "node_wrangler")
+    ]
+    addons = os.path.join(scripts, "addons")
+    if os.path.isdir(addons):
+        for entry in sorted(os.listdir(addons)):
+            path = os.path.join(addons, entry)
+            if entry.endswith(".py"):
+                modules.append({"module": entry[:-3], "name": entry[:-3], "version": "", "path": path})
+            elif os.path.isfile(os.path.join(path, "__init__.py")):
+                modules.append({"module": entry, "name": entry, "version": "", "path": os.path.join(path, "__init__.py")})
+    if os.path.isdir(extensions):
+        for repo in sorted(os.listdir(extensions)):
+            repo_path = os.path.join(extensions, repo)
+            if not os.path.isdir(repo_path):
+                continue
+            for entry in sorted(os.listdir(repo_path)):
+                path = os.path.join(repo_path, entry)
+                if os.path.isdir(path):
+                    modules.append({"module": f"bl_ext.{repo}.{entry}", "name": entry, "version": "2.0", "path": path})
+    write_json(target, {"blender": "fake", "enabled": enabled, "modules": modules})
+    print("[wrapper] scan done", flush=True)
+    return 0
+
+
+def command(argv):
+    rest = argv[argv.index("extension") + 1:]
+    if rest[0] == "sync":
+        return 0
+    ext_id = rest[-1]
+    if "nonexistent" in ext_id:
+        print("Error: extension not found: " + ext_id, flush=True)
+        return 1
+    _, _, extensions = user_dirs()
+    folder = os.path.join(extensions, "blender_org", ext_id)
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "__init__.py"), "w", encoding="utf-8") as handle:
+        handle.write("")
+    return 0
+
+
 def main():
     argv = sys.argv[1:]
-    blend = argv[3]
+    if "--command" in argv:
+        return command(argv)
     options = parse(argv)
+    if "--scan" in options:
+        return scan(options["--scan"])
+    blend = argv[3]
     with open(blend, "rb") as handle:
         content = handle.read()
     version = os.path.basename(os.path.dirname(os.path.abspath(sys.argv[0]))).split("-")[1]
@@ -57,6 +120,7 @@ def main():
             "samples": 4,
             "device": "GPU",
             "missing_files": missing,
+            "addons_failed": [name for name in str(options.get("--addons", "")).split(",") if "broken" in name],
         })
         return 0
 
@@ -70,6 +134,8 @@ def main():
         frames = list(range(start, end + 1))
     else:
         frames = list(range(1, 6))
+    config, _, _ = user_dirs()
+    print(f"[fake] config={config} addons={options.get('--addons', '')} disabled={options.get('--disable-addons', '')}", flush=True)
     delay = 0.4 if b"SLOW" in content else 0.03
     os.makedirs(out, exist_ok=True)
 

@@ -30,10 +30,22 @@
     <span class="upbar" id="upbar"></span>
     <input type="file" id="file" accept=".blend,.zip">
   </label>
+  <section class="firstrun" id="firstrun" hidden>
+    <h2>Первая настройка</h2>
+    <p>Перенесите настройки Blender с вашего компьютера, чтобы нужные аддоны работали при рендере на сервере. Это нужно сделать один раз.</p>
+    <div class="actions">
+      <button type="button" class="btn solid" data-fr="open">Настроить</button>
+      <button type="button" class="btn ghost" data-fr="skip">Пропустить</button>
+    </div>
+  </section>
   <section>
     <div class="sec-head"><h2>Задачи</h2><span class="dim" id="count"></span></div>
     <div class="list" id="jobs"></div>
   </section>
+  <details class="vers" id="setup">
+    <summary><h2>Настройки Blender</h2><span class="plus" aria-hidden="true"></span></summary>
+    <div class="vers-body" id="setupBody"></div>
+  </details>
   <details class="vers" id="vers">
     <summary><h2>Версии Blender</h2><span class="plus" aria-hidden="true"></span></summary>
     <div class="vers-body" id="versBody"></div>

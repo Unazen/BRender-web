@@ -42,6 +42,10 @@ def build_command(blender, blend, wrapper, wrapper_args, xvfb):
     return command + list(wrapper_args)
 
 
+def build_tool_command(blender, wrapper, wrapper_args):
+    return [str(blender), "-b", "--disable-autoexec", "-noaudio", "-P", str(wrapper), "--"] + list(wrapper_args)
+
+
 def classify_failure(code, tail):
     text = "\n".join(tail).lower()
     if "out of memory" in text:

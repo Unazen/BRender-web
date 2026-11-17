@@ -960,3 +960,51 @@ details.vers[open] summary .plus::after {
   display: grid;
   gap: 20px;
 }
+
+.firstrun {
+  border: 1px solid var(--acid);
+  padding: 24px 22px;
+  display: grid;
+  gap: 14px;
+  max-width: 78ch;
+}
+
+.firstrun h2 {
+  font-size: clamp(30px, 5vw, 52px);
+}
+
+.addons {
+  display: grid;
+  gap: 8px;
+}
+
+.addon {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+
+.addon.bad {
+  border-color: var(--alert);
+}
+
+.group {
+  display: grid;
+  gap: 10px;
+}
+
+.group summary {
+  cursor: pointer;
+}
+
+.group[open] > summary {
+  margin-bottom: 10px;
+}
+
+label.btn {
+  cursor: pointer;
+}

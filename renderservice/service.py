@@ -12,6 +12,7 @@ from pathlib import Path
 from . import blenders, blendver, cleanup, progress, runner, storage, thumbs
 from .db import Database
 from .installer import ACTIVE_STATES, MIN_SERIES, InstallError, Installer
+from .userenv import UserEnv
 from .worker import Worker
 
 DEVICES = {"OPTIX", "CUDA", "CPU"}
@@ -35,6 +36,7 @@ class Service:
         self.worker = Worker(self)
         self.preflight_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="preflight")
         self.installer = Installer(settings, self.installed)
+        self.userenv = UserEnv(settings, self.installed)
         self.stop_event = threading.Event()
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, name="cleanup", daemon=True)
 
@@ -49,6 +51,7 @@ class Service:
         self.worker.stop()
         self.preflight_pool.shutdown(wait=False, cancel_futures=True)
         self.installer.pool.shutdown(wait=False, cancel_futures=True)
+        self.userenv.shutdown()
         self.db.close()
 
     def _cleanup_loop(self):
@@ -78,6 +81,16 @@ class Service:
 
     def installed(self):
         return blenders.discover(self.settings.blender_root)
+
+    def addon_args(self, version):
+        enable = self.userenv.job_addons(version)
+        disable = self.userenv.job_disabled(version)
+        args = []
+        if enable:
+            args += ["--addons", ",".join(enable)]
+        if disable:
+            args += ["--disable-addons", ",".join(disable)]
+        return args, enable
 
     def _require(self, job_id):
         job = self.db.get(job_id)
@@ -212,8 +225,9 @@ class Service:
                 paths.preflight.unlink()
             except FileNotFoundError:
                 pass
+            addon_args, _ = self.addon_args(resolved["version"])
             command = runner.build_command(
-                resolved["path"], blend, self.settings.wrapper, ["--preflight", str(paths.preflight)], False
+                resolved["path"], blend, self.settings.wrapper, ["--preflight", str(paths.preflight)] + addon_args, False
             )
             try:
                 with open(paths.preflight_log, "w", encoding="utf-8", errors="replace") as log:
@@ -221,6 +235,7 @@ class Service:
                         command,
                         stdout=log,
                         stderr=subprocess.STDOUT,
+                        env=self.userenv.env(),
                         timeout=self.settings.preflight_timeout,
                         start_new_session=True,
                     )
@@ -234,6 +249,8 @@ class Service:
             if info is None:
                 self.fail(job_id, "Не удалось прочитать проект в Blender", storage.tail_lines(paths.preflight_log, 8))
                 return
+            for name in info.get("addons_failed") or []:
+                warnings.append(f"Аддон {name} не включился, сцена может отрисоваться иначе")
             self.db.update(
                 job_id,
                 status="ready",

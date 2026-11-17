@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from .config import load_settings
 from .service import Service, ServiceError
+from .userenv import SetupError
 
 
 class StartBody(BaseModel):
@@ -28,6 +29,14 @@ class SelectBody(BaseModel):
 
 class DownloadBody(BaseModel):
     version: str
+
+
+class EnabledBody(BaseModel):
+    enabled: bool
+
+
+class FinishBody(BaseModel):
+    skipped: bool = False
 
 
 @asynccontextmanager
@@ -50,6 +59,10 @@ def create_app(settings=None):
     async def on_service_error(request, exc):
         return JSONResponse({"detail": exc.message}, status_code=exc.status)
 
+    @app.exception_handler(SetupError)
+    async def on_setup_error(request, exc):
+        return JSONResponse({"detail": exc.message}, status_code=exc.status)
+
     @app.get("/")
     def index():
         return FileResponse(settings.static_dir / "index.html")
@@ -59,6 +72,38 @@ def create_app(settings=None):
     @app.get("/api/status")
     def server_status():
         return service.status()
+
+    @app.get("/api/setup")
+    def setup_get():
+        return service.userenv.public()
+
+    @app.post("/api/setup/prefs")
+    def setup_prefs(file: UploadFile = File(...)):
+        return service.userenv.store_prefs(file.file, file.filename)
+
+    @app.delete("/api/setup/prefs")
+    def setup_prefs_reset():
+        return service.userenv.reset_prefs()
+
+    @app.post("/api/setup/addons")
+    def setup_addon_upload(file: UploadFile = File(...)):
+        return service.userenv.install_addon(file.file, file.filename)
+
+    @app.post("/api/setup/rescan")
+    def setup_rescan():
+        return service.userenv.refresh()
+
+    @app.post("/api/setup/addons/{module}/enabled")
+    def setup_addon_enabled(module: str, body: EnabledBody):
+        return service.userenv.set_enabled(module, body.enabled)
+
+    @app.delete("/api/setup/addons/{module}")
+    def setup_addon_remove(module: str):
+        return service.userenv.remove(module)
+
+    @app.post("/api/setup/done")
+    def setup_done(body: FinishBody):
+        return service.userenv.finish(body.skipped)
 
     @app.get("/guide")
     def guide():

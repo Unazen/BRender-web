@@ -1,9 +1,6 @@
 import { GlyphField, ProgressStrip, TrackOverlay, scramble } from "./glyphs.js";
-
-const $ = (selector, root = document) => root.querySelector(selector);
-
-const esc = (value) =>
-  String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+import { $, esc, fmtBytes, api, post, toast, fail } from "./util.js";
+import { initSetup } from "./setup.js";
 
 function fmtTime(seconds) {
   if (seconds == null) return "—";
@@ -15,44 +12,6 @@ function fmtTime(seconds) {
   if (m) return `${m}м ${String(r).padStart(2, "0")}с`;
   return `${r}с`;
 }
-
-function fmtBytes(n) {
-  if (n == null) return "—";
-  const units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
-}
-
-async function api(path, options = {}) {
-  const res = await fetch(path, options);
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const data = await res.json();
-      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
-    } catch {}
-    throw new Error(detail);
-  }
-  return res.json();
-}
-
-const post = (path, body) =>
-  api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
-
-function toast(text, bad = false) {
-  const node = document.createElement("div");
-  node.className = "toast" + (bad ? " bad" : "");
-  node.textContent = text;
-  $("#toasts").append(node);
-  setTimeout(() => node.remove(), bad ? 9000 : 4500);
-}
-
-const fail = (error) => toast(error.message || String(error), true);
 
 const STATUS = {
   needs_selection: ["выберите файл", "idle"],
@@ -94,6 +53,7 @@ function factsHtml(job) {
   }
   if (info.format) parts.push(`<span>формат <b>${esc(info.format)}</b></span>`);
   if (job.blender) parts.push(`<span>Blender <b>${esc(job.blender.version)}</b></span>`);
+  if (job.addons && job.addons.length) parts.push(`<span>аддоны <b>${job.addons.length}</b></span>`);
   return parts.join("");
 }
 
@@ -714,3 +674,4 @@ new GlyphField($("#field"), { cell: 14, seed: 3 });
 const title = $(".hero h1");
 scramble(title, title.textContent, 800);
 loadInstalled().then(() => tick());
+initSetup();

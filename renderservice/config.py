@@ -51,6 +51,10 @@ class Settings:
         return self.data_dir / "jobs"
 
     @property
+    def user_dir(self):
+        return self.data_dir / "blender-user"
+
+    @property
     def db_path(self):
         return self.data_dir / "render.db"
 

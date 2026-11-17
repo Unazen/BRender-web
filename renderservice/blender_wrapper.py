@@ -31,6 +31,8 @@ def parse_args():
     parser.add_argument("--progress")
     parser.add_argument("--preflight")
     parser.add_argument("--addons", default="")
+    parser.add_argument("--disable-addons", default="")
+    parser.add_argument("--scan")
     parser.add_argument("--frame", type=int)
     parser.add_argument("--frames", type=parse_range)
     return parser.parse_args(argv)
@@ -43,20 +45,54 @@ def write_json(path, data):
     os.replace(tmp, path)
 
 
-def enable_addons(names):
-    if not names:
-        return
+def enable_addons(names, disabled=()):
+    failed = []
+    if not names and not disabled:
+        return failed
     import addon_utils
+    for name in disabled:
+        try:
+            addon_utils.disable(name, default_set=False)
+            say(f"аддон отключён: {name}")
+        except Exception as exc:
+            say(f"аддон не отключился: {name}: {exc}")
     for name in names:
         try:
             module = addon_utils.enable(name, default_set=False, persistent=False)
         except Exception as exc:
             say(f"аддон не включился: {name}: {exc}")
+            failed.append(name)
             continue
         if module is None:
             say(f"аддон не включился: {name}")
+            failed.append(name)
         else:
             say(f"аддон включён: {name}")
+    return failed
+
+
+def scan_addons():
+    import addon_utils
+    modules = []
+    for module in addon_utils.modules(refresh=True):
+        try:
+            info = addon_utils.module_bl_info(module)
+        except Exception:
+            info = {}
+        version = info.get("version")
+        if isinstance(version, (tuple, list)):
+            version = ".".join(str(part) for part in version)
+        modules.append({
+            "module": module.__name__,
+            "name": info.get("name") or module.__name__,
+            "version": str(version or ""),
+            "path": getattr(module, "__file__", None) or "",
+        })
+    return {
+        "blender": bpy.app.version_string,
+        "enabled": sorted(bpy.context.preferences.addons.keys()),
+        "modules": modules,
+    }
 
 
 def scene_info(scene):
@@ -203,13 +239,22 @@ class Progress:
 
 def main():
     args = parse_args()
+    if args.scan:
+        write_json(args.scan, scan_addons())
+        say("список аддонов готов")
+        return
+
     scene = bpy.context.scene
     say(f"Blender {bpy.app.version_string}, сцена {scene.name}, движок {scene.render.engine}")
-    enable_addons([name for name in args.addons.split(",") if name])
+    failed = enable_addons(
+        [name for name in args.addons.split(",") if name],
+        [name for name in args.disable_addons.split(",") if name],
+    )
 
     if args.preflight:
         info = scene_info(scene)
         info["missing_files"] = collect_missing()
+        info["addons_failed"] = failed
         write_json(args.preflight, info)
         say("preflight готов")
         return

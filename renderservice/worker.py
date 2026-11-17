@@ -109,6 +109,9 @@ class Worker(threading.Thread):
             wrapper_args += ["--frame", str(options["frame"])]
         if options.get("frames"):
             wrapper_args += ["--frames", f"{options['frames'][0]}:{options['frames'][1]}"]
+        addon_args, enabled_addons = service.addon_args(job["blender"]["version"])
+        wrapper_args += addon_args
+        service.db.update(job_id, addons=enabled_addons)
         command = runner.build_command(
             job["blender"]["path"],
             blend,
@@ -163,6 +166,7 @@ class Worker(threading.Thread):
                 text=True,
                 errors="replace",
                 bufsize=1,
+                env=self.service.userenv.env(),
                 start_new_session=True,
             )
             self.proc = proc
