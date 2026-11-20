@@ -189,6 +189,25 @@ def configure_output(scene, out_dir):
     scene.render.filepath = os.path.join(out_dir, prefix)
 
 
+def render_still(scene):
+    try:
+        scene.render.image_settings.file_format = "PNG"
+    except TypeError as exc:
+        say(f"формат PNG недоступен для сцены ({exc}); сохраняю Render Result напрямую")
+        bpy.ops.render.render(write_still=False)
+        image = bpy.data.images.get("Render Result")
+        if image is None:
+            raise RuntimeError("Blender не создал Render Result после рендера")
+        image.file_format = "PNG"
+        filepath = scene.render.filepath
+        if not filepath.lower().endswith(".png"):
+            filepath += ".png"
+        image.save(filepath=filepath)
+        say(f"кадр сохранён: {filepath}")
+    else:
+        bpy.ops.render.render(write_still=True)
+
+
 class Progress:
     def __init__(self, path, scene, mode):
         self.path = path
@@ -276,8 +295,9 @@ def main():
 
     if args.mode == "still":
         if scene.render.image_settings.file_format in VIDEO_FORMATS:
-            scene.render.image_settings.file_format = "PNG"
-        bpy.ops.render.render(write_still=True)
+            render_still(scene)
+        else:
+            bpy.ops.render.render(write_still=True)
     else:
         scene.render.use_overwrite = False
         bpy.ops.render.render(animation=True)
