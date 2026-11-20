@@ -235,7 +235,7 @@ class Service:
                         command,
                         stdout=log,
                         stderr=subprocess.STDOUT,
-                        env=self.userenv.env(),
+                        env=self.userenv.env(resolved["version"]),
                         timeout=self.settings.preflight_timeout,
                         start_new_session=True,
                     )

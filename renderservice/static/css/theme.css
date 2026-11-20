@@ -1064,3 +1064,7 @@ label.btn {
     grid-template-columns: 1fr;
   }
 }
+
+.field > .seg {
+  justify-self: start;
+}

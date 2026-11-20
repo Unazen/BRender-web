@@ -80,28 +80,28 @@ def create_app(settings=None):
         return service.userenv.public()
 
     @app.post("/api/setup/prefs")
-    def setup_prefs(file: UploadFile = File(...)):
-        return service.userenv.store_prefs(file.file, file.filename)
+    def setup_prefs(file: UploadFile = File(...), series: Optional[str] = None):
+        return service.userenv.store_prefs(file.file, file.filename, series)
 
     @app.delete("/api/setup/prefs")
-    def setup_prefs_reset():
-        return service.userenv.reset_prefs()
+    def setup_prefs_reset(series: Optional[str] = None):
+        return service.userenv.reset_prefs(series)
 
     @app.post("/api/setup/addons")
-    def setup_addon_upload(file: UploadFile = File(...)):
-        return service.userenv.install_addon(file.file, file.filename)
+    def setup_addon_upload(file: UploadFile = File(...), series: Optional[str] = None):
+        return service.userenv.install_addon(file.file, file.filename, series)
 
     @app.post("/api/setup/rescan")
-    def setup_rescan():
-        return service.userenv.refresh()
+    def setup_rescan(series: Optional[str] = None):
+        return service.userenv.rescan(series)
 
     @app.post("/api/setup/addons/{module}/enabled")
-    def setup_addon_enabled(module: str, body: EnabledBody):
-        return service.userenv.set_enabled(module, body.enabled)
+    def setup_addon_enabled(module: str, body: EnabledBody, series: Optional[str] = None):
+        return service.userenv.set_enabled(module, body.enabled, series)
 
     @app.delete("/api/setup/addons/{module}")
-    def setup_addon_remove(module: str):
-        return service.userenv.remove(module)
+    def setup_addon_remove(module: str, series: Optional[str] = None):
+        return service.userenv.remove(module, series)
 
     @app.post("/api/setup/done")
     def setup_done(body: FinishBody):

@@ -121,7 +121,7 @@ class Worker(threading.Thread):
         )
 
         try:
-            code, tail = self._run(command, paths, job_id, append=bool(options.get("resume")))
+            code, tail = self._run(command, paths, job_id, bool(options.get("resume")), service.userenv.env(job["blender"]["version"]))
         except OSError as exc:
             service.fail(job_id, f"Не удалось запустить Blender: {exc}")
             return
@@ -154,7 +154,7 @@ class Worker(threading.Thread):
             storage.build_archive(paths.renders, paths.archive)
         service.finish(job_id, "done")
 
-    def _run(self, command, paths, job_id, append):
+    def _run(self, command, paths, job_id, append, env):
         tail = deque(maxlen=40)
         with open(paths.log, "a" if append else "w", encoding="utf-8", errors="replace") as log:
             log.write("$ " + " ".join(command) + "\n")
@@ -166,7 +166,7 @@ class Worker(threading.Thread):
                 text=True,
                 errors="replace",
                 bufsize=1,
-                env=self.service.userenv.env(),
+                env=env,
                 start_new_session=True,
             )
             self.proc = proc

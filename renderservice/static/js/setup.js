@@ -10,18 +10,34 @@ export function initSetup() {
   let sig = "";
   let timer = 0;
   let working = "";
+  let active = "";
+  let uploadSeries = "";
 
-  function rowHtml(item) {
+  const current = () => (state ? state.series.find((item) => item.series === active) : null);
+  const query = (key) => (key ? `?series=${encodeURIComponent(key)}` : "");
+
+  function pickActive() {
+    if (!state || !state.series.length) {
+      active = "";
+      return;
+    }
+    if (state.series.some((item) => item.series === active)) return;
+    const filled = state.series.find((item) => item.prefs || item.addons.length);
+    const installed = state.series.find((item) => item.installed);
+    active = (filled || installed || state.series[0]).series;
+  }
+
+  function rowHtml(item, cur) {
     const meta = [item.module !== item.name ? esc(item.module) : "", item.version ? esc(item.version) : ""].filter(Boolean).join(" ");
     if (item.origin === "missing") {
       const text =
         item.status === "installing"
           ? "Скачиваю с extensions.blender.org"
           : item.status === "failed"
-            ? `Не удалось скачать: ${esc(item.message)}. Скачайте архив на extensions.blender.org и загрузите его здесь.`
-            : !state.extensions_supported && item.module.startsWith("bl_ext.")
+            ? `Не удалось скачать: ${esc(item.message)}. Скачайте архив на extensions.blender.org и добавьте его здесь.`
+            : !cur.extensions_supported && item.module.startsWith("bl_ext.")
               ? "Это расширение, для него нужен Blender 4.2 или новее."
-              : "Нет на сервере. Загрузите архив аддона кнопкой «Добавить аддон».";
+              : `Нет на сервере для версии ${esc(cur.series)}. Добавьте архив аддона кнопкой «Добавить аддон».`;
       return `<div class="addon${item.status === "failed" ? " bad" : ""}">
         <span><b>${esc(item.name)}</b> <span class="dim">${meta}</span><br><span class="${item.status === "failed" ? "alert" : "dim"}">${text}</span></span>
         <button type="button" class="btn ghost" data-s="remove" data-m="${esc(item.module)}">Убрать из списка</button>
@@ -30,43 +46,68 @@ export function initSetup() {
     const removable = item.origin !== "bundled";
     return `<div class="addon">
       <label class="check"><input type="checkbox" data-s="toggle" data-m="${esc(item.module)}"${item.enabled ? " checked" : ""}>
-        <span><b>${esc(item.name)}</b> <span class="dim">${meta} · ${ORIGIN[item.origin]}</span></span></label>
+        <span><b>${esc(item.name)}</b> <span class="dim">${meta}${meta ? " · " : ""}${ORIGIN[item.origin]}</span></span></label>
       ${removable ? `<button type="button" class="btn ghost" data-s="remove" data-m="${esc(item.module)}" aria-label="Удалить ${esc(item.name)}">Удалить</button>` : ""}
     </div>`;
   }
 
-  function group(title, items, open = true) {
+  function group(title, items, cur, open = true) {
     if (!items.length) return "";
-    const rows = `<div class="addons">${items.map(rowHtml).join("")}</div>`;
+    const rows = `<div class="addons">${items.map((item) => rowHtml(item, cur)).join("")}</div>`;
     if (open) return `<div class="group"><p class="dim">${title}</p>${rows}</div>`;
     return `<details class="group"><summary class="dim">${title}</summary>${rows}</details>`;
   }
 
+  function tabsHtml() {
+    return `<div class="field"><span>версия Blender, для которой настройки и аддоны</span>
+      <div class="seg" role="radiogroup">${state.series
+        .map(
+          (item) =>
+            `<label><input type="radio" name="series-tab" value="${esc(item.series)}"${item.series === active ? " checked" : ""}><span>${esc(item.series)}${item.installed ? "" : " (нет)"}${item.prefs ? " ✓" : ""}</span></label>`
+        )
+        .join("")}</div></div>`;
+  }
+
   function render() {
     banner.hidden = !state.needs_setup;
-    const next = JSON.stringify([state, working]);
+    pickActive();
+    const next = JSON.stringify([state, working, active, uploadSeries]);
     if (next === sig) return;
     sig = next;
-    const addons = state.addons;
-    const prefs = state.prefs
-      ? `Настройки: <b>${esc(state.prefs.name)}</b>${state.blender ? `, прочитаны в Blender ${esc(state.blender)}` : ""}.`
-      : "Настройки не загружены. Пока сервер не знает, какие аддоны вам нужны.";
-    const busy = working || (state.busy ? "Сервер работает с Blender…" : "");
+    const cur = current();
     const off = working ? " disabled" : "";
+    const busy = working || (state.busy ? "Сервер работает с Blender…" : "");
+    const autoOptions = [["", "определить автоматически"], ...state.installed_series.map((key) => [key, key])]
+      .map(([value, text]) => `<option value="${esc(value)}"${value === uploadSeries ? " selected" : ""}>${esc(text)}</option>`)
+      .join("");
+    let content = "";
+    if (cur) {
+      const prefs = cur.prefs
+        ? `Настройки для ${esc(cur.series)}: <b>${esc(cur.prefs.name)}</b>${cur.blender ? `, прочитаны в Blender ${esc(cur.blender)}` : ""}.`
+        : `Для версии ${esc(cur.series)} настройки не загружены.`;
+      content = `
+        <p>${prefs}</p>
+        ${cur.installed ? "" : `<p class="alert">Blender ${esc(cur.series)} не установлен на сервере. Скачайте его в разделе «Версии Blender», тогда эти настройки можно будет применять.</p>`}
+        <div class="row">
+          <button type="button" class="btn" data-s="rescan"${off}>Проверить заново</button>
+          ${cur.prefs ? `<button type="button" class="btn ghost" data-s="reset"${off}>Сбросить настройки ${esc(cur.series)}</button>` : ""}
+          <label class="btn solid"><span>Добавить аддон для ${esc(cur.series)}</span><input type="file" accept=".zip,.py" data-up="addon" hidden${off}></label>
+        </div>
+        ${group("Нужно добавить", cur.addons.filter((a) => a.origin === "missing"), cur)}
+        ${group("Аддоны с вашего компьютера", cur.addons.filter((a) => a.origin === "user" || a.origin === "extension"), cur)}
+        ${group(`Встроенные в Blender (${cur.addons.filter((a) => a.origin === "bundled").length})`, cur.addons.filter((a) => a.origin === "bundled"), cur, false)}`;
+    }
     body.innerHTML = `
-      <p class="dim">Переносятся аддоны и их настройки из userpref.blend. Тема, раскладка и горячие клавиши на рендер не влияют, их сервер игнорирует. Аддоны, отмеченные здесь, включаются при каждом рендере.</p>
+      <p class="dim">У каждой версии Blender свои настройки и свои аддоны: проект на 4.5 использует только то, что загружено для 4.5. Переносятся аддоны и их настройки из userpref.blend, тема и горячие клавиши на рендер не влияют. Отмеченные аддоны включаются при каждом рендере этой версии.</p>
       ${state.has_blender ? "" : `<p class="alert">Сначала установите хотя бы одну версию Blender в разделе «Версии Blender»: без неё сервер не может прочитать настройки.</p>`}
-      <p>${prefs}</p>
       <div class="row">
         <label class="btn solid"><span>Загрузить настройки</span><input type="file" accept=".blend,.zip" data-up="prefs" hidden${off}></label>
-        <label class="btn"><span>Добавить аддон</span><input type="file" accept=".zip,.py" data-up="addon" hidden${off}></label>
-        <button type="button" class="btn ghost" data-s="rescan"${off}>Проверить заново</button>
-        ${state.prefs ? `<button type="button" class="btn ghost" data-s="reset"${off}>Сбросить настройки</button>` : ""}
+        <label class="field"><span>версия загружаемых настроек</span><select data-s="useries"${off}>${autoOptions}</select></label>
       </div>
+      <p class="dim">Подойдёт userpref.blend или zip. Версию сервер берёт из выбранного списка, а при автоопределении из названия файла, папки вида 4.5 внутри архива или самого файла. Архив с папками нескольких версий загрузится сразу для всех.</p>
+      ${state.series.length ? tabsHtml() : ""}
       ${busy ? `<p class="dim"><span class="tag t-run"><i></i><span>${esc(busy)}</span></span></p>` : ""}
-      ${group("Нужно добавить", addons.filter((a) => a.origin === "missing"))}
-      ${group("Аддоны с вашего компьютера", addons.filter((a) => a.origin === "user" || a.origin === "extension"))}
-      ${group(`Встроенные в Blender (${addons.filter((a) => a.origin === "bundled").length})`, addons.filter((a) => a.origin === "bundled"), false)}
+      ${content}
       <div class="actions">
         <button type="button" class="btn solid" data-s="done">${state.configured ? "Настройка завершена" : "Готово"}</button>
       </div>`;
@@ -93,8 +134,10 @@ export function initSetup() {
   async function act(label, action) {
     working = label;
     if (state) render();
+    let result = null;
     try {
-      state = await action();
+      result = await action();
+      state = result;
     } catch (error) {
       fail(error);
     } finally {
@@ -102,20 +145,33 @@ export function initSetup() {
       if (state) render();
       schedule();
     }
+    return result;
   }
 
-  function sendFile(path, file, label) {
+  async function sendPrefs(file, key) {
     const data = new FormData();
     data.append("file", file);
-    return act(label, () => api(path, { method: "POST", body: data }));
+    const result = await act("Читаю настройки в Blender…", () => api(`/api/setup/prefs${query(key)}`, { method: "POST", body: data }));
+    if (result && result.applied && result.applied.length) {
+      active = result.applied[0];
+      sig = "";
+      render();
+      toast(`Настройки загружены для Blender ${result.applied.join(", ")}`);
+    }
+  }
+
+  async function sendAddon(file) {
+    const data = new FormData();
+    data.append("file", file);
+    const result = await act("Устанавливаю аддон и проверяю список…", () => api(`/api/setup/addons${query(active)}`, { method: "POST", body: data }));
+    if (result) toast(`Аддон добавлен для Blender ${active}`);
   }
 
   document.addEventListener("settings-file", async (event) => {
     panel.open = true;
     if (!state) await load();
     panel.scrollIntoView({ behavior: "smooth", block: "start" });
-    await sendFile("/api/setup/prefs", event.detail, "Читаю настройки в Blender…");
-    toast("Настройки загружены");
+    await sendPrefs(event.detail, "");
   });
 
   panel.addEventListener("toggle", () => {
@@ -126,13 +182,21 @@ export function initSetup() {
     const target = event.target;
     if (target.matches("[data-up]")) {
       const file = target.files[0];
+      const kind = target.dataset.up;
       target.value = "";
       if (!file) return;
-      if (target.dataset.up === "prefs") await sendFile("/api/setup/prefs", file, "Читаю настройки в Blender…");
-      else await sendFile("/api/setup/addons", file, "Устанавливаю аддон и проверяю список…");
-      toast(target.dataset.up === "prefs" ? "Настройки загружены" : "Аддон добавлен");
+      if (kind === "prefs") await sendPrefs(file, uploadSeries);
+      else await sendAddon(file);
+    } else if (target.matches("[data-s=useries]")) {
+      uploadSeries = target.value;
+      sig = "";
+      render();
+    } else if (target.matches("input[name=series-tab]")) {
+      active = target.value;
+      sig = "";
+      render();
     } else if (target.matches("[data-s=toggle]")) {
-      await act("", () => post(`/api/setup/addons/${encodeURIComponent(target.dataset.m)}/enabled`, { enabled: target.checked }));
+      await act("", () => post(`/api/setup/addons/${encodeURIComponent(target.dataset.m)}/enabled${query(active)}`, { enabled: target.checked }));
     }
   });
 
@@ -142,18 +206,19 @@ export function initSetup() {
     const kind = button.dataset.s;
     const module = button.dataset.m;
     if (kind === "retry") load();
-    else if (kind === "rescan") await act("Проверяю список аддонов…", () => post("/api/setup/rescan"));
+    else if (kind === "rescan") await act("Проверяю список аддонов…", () => post(`/api/setup/rescan${query(active)}`));
     else if (kind === "done") {
       await act("", () => post("/api/setup/done", { skipped: false }));
       toast("Настройка сохранена");
     } else if (kind === "reset") {
-      if (confirm("Сбросить загруженные настройки? Аддоны, добавленные вручную, останутся.")) {
-        await act("Сбрасываю настройки…", () => api("/api/setup/prefs", { method: "DELETE" }));
+      if (confirm(`Сбросить загруженные настройки для Blender ${active}? Аддоны, добавленные вручную, останутся.`)) {
+        await act("Сбрасываю настройки…", () => api(`/api/setup/prefs${query(active)}`, { method: "DELETE" }));
       }
     } else if (kind === "remove") {
-      const item = state.addons.find((a) => a.module === module);
-      if (item && item.origin !== "missing" && !confirm(`Удалить аддон «${item.name}» с сервера?`)) return;
-      await act("", () => api(`/api/setup/addons/${encodeURIComponent(module)}`, { method: "DELETE" }));
+      const cur = current();
+      const item = cur && cur.addons.find((a) => a.module === module);
+      if (item && item.origin !== "missing" && !confirm(`Удалить аддон «${item.name}» для Blender ${active} с сервера?`)) return;
+      await act("", () => api(`/api/setup/addons/${encodeURIComponent(module)}${query(active)}`, { method: "DELETE" }));
     }
   });
 
