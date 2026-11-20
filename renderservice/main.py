@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import auth
 from .config import load_settings
 from .service import Service, ServiceError
 from .userenv import SetupError
@@ -54,6 +55,7 @@ def create_app(settings=None):
     service = Service(settings)
     app = FastAPI(title="Blender Render", lifespan=lifespan)
     app.state.service = service
+    auth.attach(app, settings)
 
     @app.exception_handler(ServiceError)
     async def on_service_error(request, exc):
@@ -71,7 +73,7 @@ def create_app(settings=None):
 
     @app.get("/api/status")
     def server_status():
-        return service.status()
+        return {**service.status(), "auth": bool(settings.token)}
 
     @app.get("/api/setup")
     def setup_get():

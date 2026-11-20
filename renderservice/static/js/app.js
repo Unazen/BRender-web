@@ -81,9 +81,53 @@ function statHtml(label, bind) {
   return `<div class="stat"><dt>${label}</dt><dd data-${bind}>—</dd></div>`;
 }
 
+function selectOptions(items, current) {
+  return items
+    .map(([value, text]) => `<option value="${esc(value)}"${value === (current || "") ? " selected" : ""}>${esc(text)}</option>`)
+    .join("");
+}
+
+function formHtml(job, rerender) {
+  const id = job.id;
+  const info = job.info || {};
+  const preset = rerender ? job.options || {} : {};
+  const missing = (info.missing_files || []).length;
+  const defaultRange = `${info.frame_start ?? 1}:${info.frame_end ?? 1}`;
+  const range = preset.frames ? `${preset.frames[0]}:${preset.frames[1]}` : defaultRange;
+  const still = preset.mode ? preset.mode === "still" : job.suggested_mode === "still";
+  const frame = preset.frame ?? info.frame_current ?? info.frame_start ?? 1;
+  const allow = !!preset.allow_missing;
+  return `<div class="ready">
+    ${rerender ? `<p class="dim">Прежние результаты этой задачи будут удалены. Файлы проекта берутся с сервера, загружать их заново не нужно.</p>` : ""}
+    <div class="row">
+      <div class="field"><span>режим</span>
+        <div class="seg">
+          <label><input type="radio" name="mode-${id}" value="still"${still ? " checked" : ""}><span>Кадр</span></label>
+          <label><input type="radio" name="mode-${id}" value="animation"${still ? "" : " checked"}><span>Анимация</span></label>
+        </div>
+      </div>
+      <div class="field"><span>устройство</span>
+        <select data-device>${selectOptions([["OPTIX", "OptiX"], ["CUDA", "CUDA"], ["CPU", "CPU"]], preset.device || "OPTIX")}</select>
+      </div>
+      <div class="field"><span>версия Blender</span>
+        <select data-blender>${selectOptions([["", "как в проекте"], ...installed.map((v) => [v, v])], preset.blender)}</select>
+      </div>
+      <div class="field" data-f-still><span>номер кадра</span><input type="number" data-frame value="${frame}"></div>
+      <div class="field" data-f-anim><span>диапазон кадров</span><input type="text" data-range value="${range}" data-default="${defaultRange}" spellcheck="false" autocomplete="off"></div>
+    </div>
+    ${missing ? `<label class="check"><input type="checkbox" data-missing${allow ? " checked" : ""}><span class="alert">Запустить без недостающих файлов (${missing})</span></label>` : ""}
+    <div class="actions">
+      <button type="button" class="btn solid" data-act="start"${missing && !allow ? " disabled" : ""}>${rerender ? "Рендерить заново" : "Запустить рендер"}</button>
+      ${rerender ? `<button type="button" class="btn ghost" data-act="rerender-cancel">Отмена</button>` : `<button type="button" class="btn ghost" data-act="delete">Удалить</button>`}
+    </div>
+  </div>`;
+}
+
 function bodyHtml(card) {
   const job = card.job;
   const id = job.id;
+  if (card.rerender && ["done", "failed", "cancelled"].includes(job.status)) return formHtml(job, true);
+  const rerunButton = !job.project_deleted && job.info ? `<button type="button" class="btn" data-act="rerender">Рендерить заново</button>` : "";
   switch (job.status) {
     case "needs_selection":
       return `<p>В архиве несколько файлов .blend. Выберите, какой рендерить.</p>
@@ -95,37 +139,8 @@ function bodyHtml(card) {
       return `<p>Проверяю проект. Это занимает от нескольких секунд до минуты.</p>
         <div data-install hidden><p data-install-text></p><div class="dl"><i data-install-bar></i></div></div>
         ${actionsHtml(job)}`;
-    case "ready": {
-      const info = job.info || {};
-      const missing = (info.missing_files || []).length;
-      const range = `${info.frame_start ?? 1}:${info.frame_end ?? 1}`;
-      const still = job.suggested_mode === "still";
-      return `<div class="ready">
-        <div class="row">
-          <div class="field"><span>режим</span>
-            <div class="seg">
-              <label><input type="radio" name="mode-${id}" value="still"${still ? " checked" : ""}><span>Кадр</span></label>
-              <label><input type="radio" name="mode-${id}" value="animation"${still ? "" : " checked"}><span>Анимация</span></label>
-            </div>
-          </div>
-          <div class="field"><span>устройство</span>
-            <select data-device><option value="OPTIX">OptiX</option><option value="CUDA">CUDA</option><option value="CPU">CPU</option></select>
-          </div>
-          <div class="field"><span>версия Blender</span>
-            <select data-blender><option value="">как в проекте</option>${installed
-              .map((v) => `<option value="${esc(v)}">${esc(v)}</option>`)
-              .join("")}</select>
-          </div>
-          <div class="field" data-f-still><span>номер кадра</span><input type="number" data-frame value="${info.frame_current ?? info.frame_start ?? 1}"></div>
-          <div class="field" data-f-anim><span>диапазон кадров</span><input type="text" data-range value="${range}" data-default="${range}" spellcheck="false" autocomplete="off"></div>
-        </div>
-        ${missing ? `<label class="check"><input type="checkbox" data-missing><span class="alert">Запустить без недостающих файлов (${missing})</span></label>` : ""}
-        <div class="actions">
-          <button type="button" class="btn solid" data-act="start"${missing ? " disabled" : ""}>Запустить рендер</button>
-          <button type="button" class="btn ghost" data-act="delete">Удалить</button>
-        </div>
-      </div>`;
-    }
+    case "ready":
+      return formHtml(job, false);
     case "queued":
       return `<p>Позиция в очереди: <b data-pos>—</b>. Рендер начнётся, когда освободится сервер.</p>
         ${actionsHtml(job, `<button type="button" class="btn danger" data-act="cancel">Отменить</button>`)}`;
@@ -138,7 +153,8 @@ function bodyHtml(card) {
       return `<canvas class="strip" data-strip></canvas>
         <dl class="stats">${statHtml("кадры", "frames")}${statHtml("размер", "size")}${statHtml("время", "elapsed")}${statHtml("на кадр", "avg")}</dl>
         <div class="thumbs" data-thumbs></div>
-        ${actionsHtml(job, `<a class="btn solid" href="/api/jobs/${id}/download">Скачать результат</a>`)}`;
+        ${job.project_deleted ? `<p class="dim">Файлы проекта удалены с сервера. Чтобы рендерить заново, загрузите проект ещё раз.</p>` : ""}
+        ${actionsHtml(job, `<a class="btn solid" href="/api/jobs/${id}/download">Скачать результат</a>${rerunButton}`)}`;
     case "failed":
     case "cancelled": {
       const canResume = job.info && job.options && job.options.mode && !job.project_deleted;
@@ -151,7 +167,7 @@ function bodyHtml(card) {
         ${job.info ? `<canvas class="strip" data-strip></canvas>` : ""}
         ${lines ? `<pre class="log">${esc(lines)}</pre>` : ""}
         ${job.project_deleted ? `<p class="dim">Файлы проекта уже удалены, продолжить нельзя. Загрузите проект заново.</p>` : ""}
-        ${actionsHtml(job, canResume ? `<button type="button" class="btn solid" data-act="resume">Продолжить</button>` : "")}`;
+        ${actionsHtml(job, (canResume ? `<button type="button" class="btn solid" data-act="resume">Продолжить</button>` : "") + rerunButton)}`;
     }
   }
   return "";
@@ -303,6 +319,7 @@ function createCard(job) {
     facts: null,
     notes: null,
     imgKey: null,
+    rerender: false,
   };
   const title = $("h3", root);
   title.textContent = job.name;
@@ -319,6 +336,7 @@ function updateCard(card, job) {
   const [label, kind] = STATUS[job.status] || [job.status, "idle"];
   if (card.tag !== job.status) {
     card.tag = job.status;
+    card.rerender = false;
     const tag = $(".tag", root);
     tag.className = `tag t-${kind}`;
     tag.innerHTML = `<i></i><span></span>`;
@@ -334,7 +352,7 @@ function updateCard(card, job) {
     card.notes = notes;
     $(".notes", root).innerHTML = notes;
   }
-  const sig = job.status + "|" + (job.status === "needs_selection" ? (job.candidates || []).join(",") : "") + "|" + (job.status === "failed" ? job.error || "" : "") + "|" + (job.project_deleted ? 1 : 0);
+  const sig = job.status + "|" + (job.status === "needs_selection" ? (job.candidates || []).join(",") : "") + "|" + (job.status === "failed" ? job.error || "" : "") + "|" + (job.project_deleted ? 1 : 0) + "|" + (card.rerender ? 1 : 0);
   if (sig !== card.sig) {
     card.sig = sig;
     card.detailCount = -1;
@@ -414,6 +432,11 @@ async function onClick(card, event) {
   const button = event.target.closest("[data-act]");
   if (!button || button.tagName === "A") return;
   const act = button.dataset.act;
+  if (act === "rerender" || act === "rerender-cancel") {
+    card.rerender = act === "rerender";
+    updateCard(card, card.job);
+    return;
+  }
   try {
     if (act === "log") {
       card.logOpen = !card.logOpen;
@@ -484,6 +507,7 @@ async function tick(now = false) {
     const [jobs, status] = await Promise.all([api("/api/jobs"), api("/api/status")]);
     sync(jobs);
     renderBar(status);
+    if (status.auth && !$("#logout")) $(".foot .wrap").insertAdjacentHTML("beforeend", ` <a id="logout" href="/logout">Выйти</a>`);
     active = jobs.some((job) => ["preflight", "queued", "rendering"].includes(job.status));
   } catch {
     renderBar(null);
@@ -498,9 +522,13 @@ const dropText = $("#dropText");
 const upbar = $("#upbar");
 const defaultDropText = dropText.textContent;
 let uploading = false;
+let currentUpload = null;
+const upcancel = $("#upcancel");
 
 function resetDrop() {
   uploading = false;
+  currentUpload = null;
+  upcancel.hidden = true;
   drop.classList.remove("busy", "over");
   dropText.textContent = defaultDropText;
   upbar.style.width = "0";
@@ -521,6 +549,8 @@ function upload(file) {
   const data = new FormData();
   data.append("file", file);
   const xhr = new XMLHttpRequest();
+  currentUpload = xhr;
+  upcancel.hidden = false;
   xhr.open("POST", "/api/jobs");
   xhr.upload.onprogress = (event) => {
     if (!event.lengthComputable) return;
@@ -540,6 +570,10 @@ function upload(file) {
     }
     resetDrop();
   };
+  xhr.onabort = () => {
+    toast("Загрузка отменена");
+    resetDrop();
+  };
   xhr.onerror = () => {
     toast("Не удалось загрузить: нет связи с сервером", true);
     resetDrop();
@@ -551,6 +585,18 @@ $("#file").addEventListener("change", (event) => {
   const file = event.target.files[0];
   event.target.value = "";
   if (file) upload(file);
+});
+
+upcancel.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (currentUpload) currentUpload.abort();
+});
+
+$("#settingsFile").addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (file) document.dispatchEvent(new CustomEvent("settings-file", { detail: file }));
 });
 
 for (const name of ["dragover", "drop"]) window.addEventListener(name, (event) => event.preventDefault());

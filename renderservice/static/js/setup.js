@@ -82,7 +82,10 @@ export function initSetup() {
       state = await api("/api/setup");
       render();
     } catch (error) {
-      if (!state) return;
+      if (!state) {
+        body.innerHTML = `<p class="alert">Не удалось получить настройки с сервера: ${esc(error.message)}. Если файлы проекта только что обновили, перезапустите службу командой systemctl --user restart blender-render и обновите страницу (Ctrl+Shift+R).</p><div class="actions"><button type="button" class="btn" data-s="retry">Повторить</button></div>`;
+        return;
+      }
     }
     schedule();
   }
@@ -107,6 +110,14 @@ export function initSetup() {
     return act(label, () => api(path, { method: "POST", body: data }));
   }
 
+  document.addEventListener("settings-file", async (event) => {
+    panel.open = true;
+    if (!state) await load();
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    await sendFile("/api/setup/prefs", event.detail, "Читаю настройки в Blender…");
+    toast("Настройки загружены");
+  });
+
   panel.addEventListener("toggle", () => {
     if (panel.open) load();
   });
@@ -130,7 +141,8 @@ export function initSetup() {
     if (!button) return;
     const kind = button.dataset.s;
     const module = button.dataset.m;
-    if (kind === "rescan") await act("Проверяю список аддонов…", () => post("/api/setup/rescan"));
+    if (kind === "retry") load();
+    else if (kind === "rescan") await act("Проверяю список аддонов…", () => post("/api/setup/rescan"));
     else if (kind === "done") {
       await act("", () => post("/api/setup/done", { skipped: false }));
       toast("Настройка сохранена");

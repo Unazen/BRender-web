@@ -17,6 +17,10 @@ export function fmtBytes(n) {
 
 export async function api(path, options = {}) {
   const res = await fetch(path, options);
+  if (res.status === 401) {
+    location.href = "/login";
+    throw new Error("Нужен вход");
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {

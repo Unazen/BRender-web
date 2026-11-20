@@ -45,6 +45,7 @@ class Settings:
     kill_grace: float = 10
     auto_install: bool = False
     download_base: str = DEFAULT_DOWNLOAD_BASE
+    token: str = ""
 
     @property
     def jobs_dir(self):
@@ -81,4 +82,5 @@ def load_settings():
         xvfb=os.environ.get("RENDER_XVFB", "auto").lower(),
         auto_install=_flag("RENDER_AUTO_INSTALL", True),
         download_base=os.environ.get("RENDER_DOWNLOAD_BASE") or DEFAULT_DOWNLOAD_BASE,
+        token=os.environ.get("RENDER_TOKEN", "").strip(),
     )

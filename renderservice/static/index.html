@@ -23,13 +23,22 @@
   <div class="wrap" id="bar"></div>
 </div>
 <main class="wrap">
-  <label class="drop" id="drop">
-    <span class="mark" aria-hidden="true"></span>
-    <h2>Загрузить проект</h2>
-    <p id="dropText">Перетащите сюда .blend или .zip с текстурами рядом. Нажмите, чтобы выбрать файл.</p>
-    <span class="upbar" id="upbar"></span>
-    <input type="file" id="file" accept=".blend,.zip">
-  </label>
+  <div class="drops">
+    <label class="drop" id="drop">
+      <span class="mark" aria-hidden="true"></span>
+      <h2>Загрузить проект</h2>
+      <p id="dropText">Перетащите сюда .blend или .zip с текстурами рядом. Нажмите, чтобы выбрать файл.</p>
+      <span class="upbar" id="upbar"></span>
+      <button type="button" class="btn" id="upcancel" hidden>Отменить загрузку</button>
+      <input type="file" id="file" accept=".blend,.zip">
+    </label>
+    <label class="drop alt">
+      <span class="mark" aria-hidden="true"></span>
+      <h2>Загрузить настройки</h2>
+      <p>userpref.blend или zip с папкой настроек Blender. Нужно, если сцене требуются аддоны.</p>
+      <input type="file" id="settingsFile" accept=".blend,.zip">
+    </label>
+  </div>
   <section class="firstrun" id="firstrun" hidden>
     <h2>Первая настройка</h2>
     <p>Перенесите настройки Blender с вашего компьютера, чтобы нужные аддоны работали при рендере на сервере. Это нужно сделать один раз.</p>

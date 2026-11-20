@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<title>Вход</title>
+<link rel="stylesheet" href="/static/css/fonts.css">
+<link rel="stylesheet" href="/static/css/theme.css">
+<style>
+.hero.small { height: clamp(170px, 24vw, 230px); }
+.hero.small h1 { font-size: clamp(56px, 12vw, 120px); }
+.login { display: grid; gap: 16px; max-width: 460px; }
+.login input { width: 100%; }
+</style>
+</head>
+<body>
+<header class="hero small">
+  <canvas id="field" aria-hidden="true"></canvas>
+  <div class="wrap"><h1>Вход</h1></div>
+</header>
+<main class="wrap">
+  <form class="login" id="form">
+    <label class="field"><span>токен доступа</span><input type="password" id="token" autocomplete="current-password" autofocus required></label>
+    <p class="alert" id="error" role="alert" hidden></p>
+    <div class="actions"><button type="submit" class="btn solid" id="go">Войти</button></div>
+    <p class="dim">Токен записан в файле .env сервиса, строка RENDER_TOKEN.</p>
+  </form>
+</main>
+<script type="module">
+import { GlyphField } from "/static/js/glyphs.js";
+new GlyphField(document.getElementById("field"), { cell: 14, seed: 9 });
+const form = document.getElementById("form");
+const error = document.getElementById("error");
+const button = document.getElementById("go");
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  error.hidden = true;
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: document.getElementById("token").value }),
+    });
+    if (res.ok) {
+      location.href = "/";
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    error.textContent = data.detail || "Не удалось войти";
+  } catch {
+    error.textContent = "Нет связи с сервером";
+  }
+  error.hidden = false;
+  button.disabled = false;
+});
+</script>
+</body>
+</html>

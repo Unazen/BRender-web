@@ -724,6 +724,60 @@ def test_setup_needs_blender(tmp):
         assert response.status_code == 409 and "Blender" in response.json()["detail"]
 
 
+def test_token_auth(tmp):
+    from renderservice import auth
+    auth.FAIL_DELAY = 0
+    auth.failures.clear()
+    try:
+        client, settings = make_client(tmp, token="secret-token")
+        with client:
+            assert client.get("/api/jobs").status_code == 401
+            assert client.get("/api/status").status_code == 401
+            redirect = client.get("/", follow_redirects=False)
+            assert redirect.status_code == 303 and redirect.headers["location"] == "/login"
+            assert client.get("/login").status_code == 200
+            assert client.get("/static/css/theme.css").status_code == 200
+            assert client.post("/api/jobs", files={"file": ("a.blend", blend(), "application/octet-stream")}).status_code == 401
+            assert client.post("/api/login", json={"token": "nope"}).status_code == 401
+            assert client.get("/api/jobs").status_code == 401
+            bearer = client.get("/api/jobs", headers={"Authorization": "Bearer secret-token"})
+            assert bearer.status_code == 200
+            ok = client.post("/api/login", json={"token": "secret-token"})
+            assert ok.status_code == 200 and "render_session" in ok.headers["set-cookie"] and "HttpOnly" in ok.headers["set-cookie"]
+            assert client.get("/api/jobs").status_code == 200
+            assert client.get("/").status_code == 200
+            assert client.get("/api/status").json()["auth"] is True
+            client.get("/logout", follow_redirects=False)
+            assert client.get("/api/jobs").status_code == 401
+            for _ in range(auth.FAIL_LIMIT):
+                client.post("/api/login", json={"token": "bad"})
+            assert client.post("/api/login", json={"token": "secret-token"}).status_code == 429
+    finally:
+        auth.FAIL_DELAY = 1.0
+        auth.failures.clear()
+
+
+def test_no_token_means_open(tmp):
+    client, settings = make_client(tmp)
+    with client:
+        assert client.get("/api/jobs").status_code == 200
+        assert client.get("/login", follow_redirects=False).status_code == 303
+        assert client.get("/api/status").json()["auth"] is False
+
+
+def test_rerender_after_done(tmp):
+    client, settings = make_client(tmp)
+    with client:
+        job_id = upload(client, "r.blend", blend(marker=b"STILL")).json()["id"]
+        wait_status(client, job_id, {"ready"})
+        client.post(f"/api/jobs/{job_id}/start", json={"mode": "still", "device": "CPU"})
+        first = wait_status(client, job_id, {"done"})
+        again = client.post(f"/api/jobs/{job_id}/start", json={"mode": "animation", "device": "CPU", "frames": [1, 2]})
+        assert again.status_code == 200 and again.json()["status"] == "queued"
+        second = wait_status(client, job_id, {"done"})
+        assert second["progress"]["total_frames"] == 2 and second["outputs"]["count"] == 2
+
+
 def test_status_endpoint(tmp):
     client, settings = make_client(tmp, auto_install=False)
     with client:

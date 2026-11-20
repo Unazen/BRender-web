@@ -543,6 +543,7 @@ main {
 }
 
 input[type="text"],
+input[type="password"],
 input[type="number"],
 select {
   font: inherit;
@@ -1007,4 +1008,59 @@ details.vers[open] summary .plus::after {
 
 label.btn {
   cursor: pointer;
+}
+
+.drops {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.drop.alt {
+  background: var(--void);
+  color: var(--acid);
+  border: 1px solid var(--acid);
+}
+
+.drop.alt h2 {
+  font-size: clamp(26px, 3.2vw, 38px);
+}
+
+.drop.alt .mark::before,
+.drop.alt .mark::after {
+  background: var(--acid);
+}
+
+.drop.alt:hover {
+  background: var(--acid);
+  color: var(--void);
+}
+
+.drop.alt:hover .mark::before,
+.drop.alt:hover .mark::after {
+  background: var(--void);
+}
+
+.drop .btn {
+  position: relative;
+  z-index: 2;
+  justify-self: start;
+  border-color: var(--void);
+  color: var(--void);
+  background: transparent;
+}
+
+.drop .btn:hover:not(:disabled) {
+  background: var(--void);
+  color: var(--acid);
+}
+
+.drop.busy input {
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .drops {
+    grid-template-columns: 1fr;
+  }
 }
