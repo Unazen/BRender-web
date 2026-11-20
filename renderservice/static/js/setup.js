@@ -5,6 +5,7 @@ const ORIGIN = { missing: "не найден", user: "загружен", extensi
 export function initSetup() {
   const panel = $("#setup");
   const body = $("#setupBody");
+  const brief = $("#setupBrief");
   const banner = $("#firstrun");
   let state = null;
   let sig = "";
@@ -15,6 +16,27 @@ export function initSetup() {
 
   const current = () => (state ? state.series.find((item) => item.series === active) : null);
   const query = (key) => (key ? `?series=${encodeURIComponent(key)}` : "");
+
+  const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(n / 1024))} КБ`);
+  const fmtDate = (t) =>
+    t ? new Date(t * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : "дата неизвестна";
+
+  function fileHtml(cur) {
+    const f = cur.prefs;
+    if (!f) return `<p>Для версии ${esc(cur.series)} файл настроек не загружен.</p>`;
+    if (!f.exists) {
+      return `<p class="alert">Файл настроек для ${esc(cur.series)} записан в базе, но не найден на диске: ${esc(f.path)}. Загрузите его заново.</p>`;
+    }
+    return `<div class="filebox"><span><b>${esc(f.name)}</b> загружен, ${fmtSize(f.size)}, ${fmtDate(f.uploaded)}</span>
+      <span class="dim">на сервере: ${esc(f.path)}</span>
+      <span class="dim">найдено аддонов: ${cur.addons.length}${cur.scanned ? `, список прочитан ${fmtDate(cur.scanned)}` : ""}</span></div>`;
+  }
+
+  function briefText() {
+    const loaded = state.series.filter((item) => item.prefs && item.prefs.exists);
+    if (!loaded.length) return "Пока ни для одной версии настройки не загружены.";
+    return "Загружено: " + loaded.map((item) => `${item.series} (${item.prefs.name}, ${fmtSize(item.prefs.size)})`).join(", ");
+  }
 
   function pickActive() {
     if (!state || !state.series.length) {
@@ -69,11 +91,17 @@ export function initSetup() {
   }
 
   function render() {
+    if (!Array.isArray(state.series)) {
+      body.innerHTML = `<p class="alert">Сервер ответил в старом формате: он работает на устаревшем коде, а страница новая. Перезапустите службу командой systemctl --user restart blender-render и обновите страницу (Ctrl+Shift+R). Если это не помогло, проверьте, что файлы проекта заменены в той папке, откуда запускается служба.</p>`;
+      brief.textContent = "Сервер на старой версии кода";
+      return;
+    }
     banner.hidden = !state.needs_setup;
     pickActive();
     const next = JSON.stringify([state, working, active, uploadSeries]);
     if (next === sig) return;
     sig = next;
+    brief.textContent = briefText();
     const cur = current();
     const off = working ? " disabled" : "";
     const busy = working || (state.busy ? "Сервер работает с Blender…" : "");
@@ -82,11 +110,9 @@ export function initSetup() {
       .join("");
     let content = "";
     if (cur) {
-      const prefs = cur.prefs
-        ? `Настройки для ${esc(cur.series)}: <b>${esc(cur.prefs.name)}</b>${cur.blender ? `, прочитаны в Blender ${esc(cur.blender)}` : ""}.`
-        : `Для версии ${esc(cur.series)} настройки не загружены.`;
       content = `
-        <p>${prefs}</p>
+        ${fileHtml(cur)}
+        <p class="dim">Папка версии на сервере: ${esc(cur.folder)}</p>
         ${cur.installed ? "" : `<p class="alert">Blender ${esc(cur.series)} не установлен на сервере. Скачайте его в разделе «Версии Blender», тогда эти настройки можно будет применять.</p>`}
         <div class="row">
           <button type="button" class="btn" data-s="rescan"${off}>Проверить заново</button>
@@ -123,6 +149,10 @@ export function initSetup() {
       state = await api("/api/setup");
       render();
     } catch (error) {
+      if (state) {
+        body.innerHTML = `<p class="alert">Не удалось показать настройки: ${esc(error.message)}. Сделайте снимок консоли браузера (F12) и пришлите разработчику.</p>`;
+        return;
+      }
       if (!state) {
         body.innerHTML = `<p class="alert">Не удалось получить настройки с сервера: ${esc(error.message)}. Если файлы проекта только что обновили, перезапустите службу командой systemctl --user restart blender-render и обновите страницу (Ctrl+Shift+R).</p><div class="actions"><button type="button" class="btn" data-s="retry">Повторить</button></div>`;
         return;

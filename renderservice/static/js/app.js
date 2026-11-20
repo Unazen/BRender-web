@@ -24,6 +24,7 @@ const STATUS = {
   cancelled: ["отменено", "idle"],
 };
 
+const EXPECTED_BUILD = "2026-11-20-series";
 let installed = [];
 let installedAt = 0;
 const cards = new Map();
@@ -494,6 +495,22 @@ function renderBar(status) {
   }
 }
 
+function versionNotice(status) {
+  let notice = $("#buildNotice");
+  const stale = status.build !== EXPECTED_BUILD;
+  if (stale && !notice) {
+    notice = document.createElement("p");
+    notice.id = "buildNotice";
+    notice.className = "alert";
+    notice.setAttribute("role", "alert");
+    $(".bar .wrap").append(notice);
+  }
+  if (notice) {
+    notice.hidden = !stale;
+    notice.textContent = `Сервер работает на старой версии кода (${status.build || "неизвестно"}, страница ждёт ${EXPECTED_BUILD}). Перезапустите службу: systemctl --user restart blender-render`;
+  }
+}
+
 let timer = 0;
 let polling = false;
 
@@ -507,6 +524,7 @@ async function tick(now = false) {
     const [jobs, status] = await Promise.all([api("/api/jobs"), api("/api/status")]);
     sync(jobs);
     renderBar(status);
+    versionNotice(status);
     if (status.auth && !$("#logout")) $(".foot .wrap").insertAdjacentHTML("beforeend", ` <a id="logout" href="/logout">Выйти</a>`);
     active = jobs.some((job) => ["preflight", "queued", "rendering"].includes(job.status));
   } catch {

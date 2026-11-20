@@ -98,6 +98,8 @@ class UserEnv:
         self.busy = 0
         try:
             self.migrate_legacy()
+            for key in self.installed_keys():
+                self.ensure_dirs(key)
         except OSError:
             pass
 
@@ -286,18 +288,32 @@ class UserEnv:
             items.append({"module": module, "status": status, "message": message, **item})
         items.sort(key=lambda row: (ORIGIN_ORDER[row["origin"]], row["name"].lower()))
         versions = [item["version"] for item in self.installed_fn() if item["version"][:2] == tuple_of(key)]
+        file = self.paths(key)["config"] / "userpref.blend"
+        prefs = None
+        if entry["prefs"] or file.is_file():
+            prefs = dict(entry["prefs"] or {"name": "userpref.blend", "uploaded": None})
+            prefs["exists"] = file.is_file()
+            prefs["size"] = file.stat().st_size if prefs["exists"] else 0
+            prefs["path"] = str(file)
         return {
             "series": key,
+            "folder": str(self.root / key),
             "installed": bool(versions),
             "installed_version": ".".join(str(part) for part in versions[-1]) if versions else None,
             "extensions_supported": tuple_of(key) >= EXT_MIN,
-            "prefs": entry["prefs"],
+            "prefs": prefs,
             "blender": entry["blender"],
+            "scanned": entry["scanned"],
             "addons": items,
         }
 
     def public(self):
         state = self.load()
+        for key in self.installed_keys():
+            try:
+                self.ensure_dirs(key)
+            except OSError:
+                pass
         keys = set(self.installed_keys()) | set(state["series"])
         series = []
         for key in sorted(keys, key=tuple_of, reverse=True):
@@ -309,6 +325,7 @@ class UserEnv:
             "busy": bool(self.pending) or self.busy > 0,
             "has_blender": bool(self.installed_fn()),
             "installed_series": self.installed_keys(),
+            "root": str(self.root),
             "series": series,
         }
 

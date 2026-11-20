@@ -803,6 +803,25 @@ def test_legacy_layout_is_migrated(tmp):
         assert client.post("/api/setup/rescan", params={"series": "4.5"}).status_code == 200
 
 
+def test_series_folders_and_file_info(tmp):
+    settings = make_settings(tmp)
+    client = TestClient(create_app(settings))
+    with client:
+        assert (settings.user_dir / "4.5" / "config").is_dir() and (settings.user_dir / "3.6" / "addons" if False else settings.user_dir / "3.6" / "config").is_dir()
+        assert not (settings.user_dir / "config").exists()
+        assert client.get("/api/status").json()["build"]
+        state = client.get("/api/setup").json()
+        assert state["root"] == str(settings.user_dir)
+        assert series_of_state(state, "4.5")["prefs"] is None
+        loaded = prefs_upload(client, prefs_bytes("v405", ("cycles",))).json()
+        info = series_of_state(loaded, "4.5")["prefs"]
+        assert info["exists"] is True and info["size"] > 0 and info["path"].endswith("4.5/config/userpref.blend")
+        assert info["name"] == "userpref.blend" and info["uploaded"]
+        (settings.user_dir / "4.5" / "config" / "userpref.blend").unlink()
+        gone = series_of_state(client.get("/api/setup").json(), "4.5")["prefs"]
+        assert gone["exists"] is False
+
+
 def test_token_auth(tmp):
     from renderservice import auth
     auth.FAIL_DELAY = 0

@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth
+from . import BUILD, auth
 from .config import load_settings
 from .service import Service, ServiceError
 from .userenv import SetupError
@@ -73,7 +73,7 @@ def create_app(settings=None):
 
     @app.get("/api/status")
     def server_status():
-        return {**service.status(), "auth": bool(settings.token)}
+        return {**service.status(), "auth": bool(settings.token), "build": BUILD}
 
     @app.get("/api/setup")
     def setup_get():

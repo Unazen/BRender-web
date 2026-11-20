@@ -1068,3 +1068,15 @@ label.btn {
 .field > .seg {
   justify-self: start;
 }
+
+.brief {
+  margin: 10px 0 0;
+}
+
+.filebox {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--acid);
+  padding: 12px 14px;
+  overflow-wrap: anywhere;
+}
